@@ -1,0 +1,9 @@
+Use this token to access the HTTP API:
+8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw
+
+ID 1116977306
+
+
+
+git config --global user.name "Seu Nome"
+git config --global user.email "seu.email@exemplo.com"
