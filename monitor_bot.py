@@ -31,10 +31,11 @@ def iniciar_servidor_fake():
     t.start()
 
 # ==============================================================================
-# 2. CONFIGURAÇÕES DO ROBÔ
+# 2. CONFIGURAÇÕES PESSOAIS
 # ==============================================================================
+# ⚠️ ATENÇÃO: COLOQUE SEU TOKEN E CHAT_ID AQUI DE NOVO!
 TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"      # <--- CONFIRA SEU TOKEN (Não esqueça de colocar de novo!)
-CHAT_ID = "1116977306"  # <--- CONFIRA SEU ID
+CHAT_ID = "1116977306"  # <--- CONFIRA SEU ID-+9
 
 CARTEIRA = [
     "BTC-USD", "ETH-USD", "SOL-USD", 
@@ -56,7 +57,6 @@ def criar_sessao_disfarce():
 
 def limpar_cache_yahoo():
     try:
-        # No Linux (Render), o caminho do cache é diferente, mas tentamos limpar
         cache_path = Path.home() / ".cache" / "py-yfinance"
         if cache_path.exists():
             shutil.rmtree(cache_path)
@@ -86,13 +86,13 @@ def analisar_mercado():
             ticker = yf.Ticker(ativo, session=sessao_fake)
             df = ticker.history(period="6mo")
             
-            if df.empty: # Tentativa sem sessão se falhar
+            if df.empty: 
                 ticker = yf.Ticker(ativo)
                 df = ticker.history(period="6mo")
 
             if df.empty or len(df) < 22: continue
             
-            # Setup 9.1 / Cruzamento
+            # Estratégia: Média 9 cruzando Média 21
             media_curta = ta.sma(df['Close'], length=9).iloc[-1]
             media_longa = ta.sma(df['Close'], length=21).iloc[-1]
             preco_atual = df['Close'].iloc[-1]
@@ -103,27 +103,28 @@ def analisar_mercado():
                 msg_relatorio += f"🟢 {ativo} | {preco_atual:.2f} ({var_dia:+.1f}%)\n"
                 print(f"✅ {ativo}: ALTA")
             
-            time.sleep(random.randint(5, 10)) 
+            time.sleep(random.randint(2, 5)) 
 
         except Exception as e:
             print(f"❌ Erro {ativo}: {e}")
 
+    # --- AQUI ESTÁ A MUDANÇA (HEARTBEAT) ---
     if oportunidades > 0:
         msg_relatorio += "\n🚀 Verifique o Gráfico!"
         enviar_telegram(msg_relatorio)
     else:
-        print(">> Mercado calmo. Nenhuma mensagem enviada.")
+        # Agora ele avisa que está vivo, mesmo sem oportunidades
+        msg_quiet = f"📉 Status ({hora_atual}): Mercado lateral.\nNenhuma entrada agora, mas sigo vigiando."
+        enviar_telegram(msg_quiet)
 
 # ==============================================================================
 # 4. EXECUÇÃO FINAL
 # ==============================================================================
 if __name__ == "__main__":
-    # 1. Inicia o Site Falso (Para enganar o Render)
     iniciar_servidor_fake()
     
-    # 2. Inicia o Robô
-    print("✅ Robô Iniciado com Servidor Fake!")
-    enviar_telegram("🤖 Robô na Nuvem Ativado!\nO servidor 'fake' está segurando a porta aberta.")
+    print("✅ Robô Iniciado (Modo Tagarela)!")
+    enviar_telegram("🤖 Atualização Recebida!\nAgora avisarei a cada 60min, aconteça o que acontecer.")
 
     while True:
         analisar_mercado()
