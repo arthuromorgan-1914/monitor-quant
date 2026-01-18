@@ -4,3 +4,4 @@ pandas_ta
 requests
 lxml
 requests_html
+flask
