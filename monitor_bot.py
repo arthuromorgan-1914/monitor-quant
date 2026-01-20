@@ -21,9 +21,16 @@ NOME_PLANILHA_GOOGLE = "Trades do Robô Quant" # Nome exato da sua planilha
 
 # Ativos para monitorar
 CARTEIRA = [
+    # Cripto (24h)
     "BTC-USD", "ETH-USD", "SOL-USD", 
+    "LINK-USD", "AVAX-USD", "ADA-USD", "XRP-USD", # <-- As novas Altcoins
+    
+    # Ações Brasil (B3)
     "PETR4.SA", "VALE3.SA", "WEGE3.SA", "PRIO3.SA",
-    "AAPL", "NVDA", "MSFT", "TSLA"
+    
+    # Ações EUA (Tech & Quantum)
+    "AAPL", "NVDA", "MSFT", "TSLA",
+    "IONQ", "RGTI" # <-- As novas de Quantum
 ]
 
 # Conecta ao Bot do Telegram
