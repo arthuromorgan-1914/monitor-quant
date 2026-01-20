@@ -177,7 +177,7 @@ def analisar_mercado():
                 # Validação rápida de string vazia
                 if len(ativo) < 3: continue
                 
-                df = yf.Ticker(ativo).history(period="6mo")
+                df = yf.Ticker(ativo).history(period="5d", interval="15m")
                 if len(df) < 22: continue
                 
                 sma9 = ta.sma(df['Close'], length=9).iloc[-1]
