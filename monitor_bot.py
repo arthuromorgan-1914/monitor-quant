@@ -1,8 +1,9 @@
 import os
 import shutil
-import requests
+import telebot # A nova biblioteca de botões
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import gspread # O carteiro do Google
 import yfinance as yf
-import pandas as pd
 import pandas_ta as ta
 import time
 import random
@@ -12,121 +13,156 @@ from datetime import datetime
 from pathlib import Path
 
 # ==============================================================================
-# 1. O TRUQUE DO SITE FANTASMA (Para o Render não desligar)
+# 1. CONFIGURAÇÕES (PREENCHA AQUI!)
 # ==============================================================================
-app = Flask(__name__)
+TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"      
+CHAT_ID = "1116977306"  
+NOME_PLANILHA_GOOGLE = "Trades do Robô Quant" # Nome exato da sua planilha
 
-@app.route('/')
-def home():
-    return "Estou Vivo! O Robô está trabalhando."
-
-def run_server():
-    # Pega a porta que o Render exige ou usa a 5000 se for local
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
-def iniciar_servidor_fake():
-    # Roda o servidor numa linha paralela (thread) para não travar o robô
-    t = threading.Thread(target=run_server)
-    t.start()
-
-# ==============================================================================
-# 2. CONFIGURAÇÕES PESSOAIS
-# ==============================================================================
-# ⚠️ ATENÇÃO: COLOQUE SEU TOKEN E CHAT_ID AQUI DE NOVO!
-TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"      # <--- CONFIRA SEU TOKEN (Não esqueça de colocar de novo!)
-CHAT_ID = "1116977306"  # <--- CONFIRA SEU ID-+9
-
+# Ativos para monitorar
 CARTEIRA = [
     "BTC-USD", "ETH-USD", "SOL-USD", 
     "PETR4.SA", "VALE3.SA", "WEGE3.SA", "PRIO3.SA",
     "AAPL", "NVDA", "MSFT", "TSLA"
 ]
 
-INTERVALO_VARREDURA = 60 # Minutos
+# Conecta ao Bot do Telegram
+bot = telebot.TeleBot(TOKEN)
 
 # ==============================================================================
-# 3. LÓGICA DO ROBÔ
+# 2. SISTEMA GOOGLE SHEETS (O ESCRITURÁRIO)
 # ==============================================================================
-def criar_sessao_disfarce():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-    return session
-
-def limpar_cache_yahoo():
+def registrar_na_planilha(ativo, tipo, preco):
     try:
-        cache_path = Path.home() / ".cache" / "py-yfinance"
-        if cache_path.exists():
-            shutil.rmtree(cache_path)
-            print("🧹 Cache deletado.")
-    except Exception:
-        pass
-
-def enviar_telegram(mensagem):
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": mensagem, "disable_web_page_preview": True}
-        requests.post(url, data=data)
+        # Conecta usando o arquivo creds.json que está na pasta
+        gc = gspread.service_account(filename='creds.json')
+        sh = gc.open(NOME_PLANILHA_GOOGLE)
+        worksheet = sh.sheet1 # Primeira aba
+        
+        data_hoje = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
+        # Adiciona a linha nova
+        # Colunas: Data | Ativo | Tipo | Preço Entrada | Preço Saída | Resultado | Status
+        worksheet.append_row([data_hoje, ativo, tipo, preco, "", "", "Aberta"])
+        return True
     except Exception as e:
-        print(f"❌ Erro Telegram: {e}")
+        print(f"❌ Erro Google: {e}")
+        return False
+
+# ==============================================================================
+# 3. O OUVIDO DO ROBÔ (ESCUTA OS BOTÕES)
+# ==============================================================================
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    # O botão manda dados assim: "COMPRA|PETR4.SA|30.50"
+    dados = call.data.split("|")
+    acao = dados[0]
+    ativo = dados[1]
+    preco = dados[2]
+
+    if acao == "COMPRA":
+        bot.answer_callback_query(call.id, "Registrando na planilha...")
+        
+        sucesso = registrar_na_planilha(ativo, "Compra Simulada", preco)
+        
+        if sucesso:
+            # Edita a mensagem para mostrar que deu certo
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"{call.message.text}\n\n✅ REGISTRADO NA PLANILHA!"
+            )
+        else:
+            bot.answer_callback_query(call.id, "❌ Erro ao salvar na planilha.")
+
+# ==============================================================================
+# 4. O CÉREBRO ANALÍTICO (LOOP DE MERCADO)
+# ==============================================================================
+def enviar_alerta_com_botao(ativo, preco):
+    markup = InlineKeyboardMarkup()
+    # Cria o botão com os dados escondidos (COMPRA|ATIVO|PRECO)
+    botao = InlineKeyboardButton(
+        text=f"📝 Simular Compra @ {preco:.2f}", 
+        callback_data=f"COMPRA|{ativo}|{preco:.2f}"
+    )
+    markup.add(botao)
+    
+    msg = f"🟢 **OPORTUNIDADE DETECTADA**\n\nAtivo: {ativo}\nPreço: {preco:.2f}\nSetup: Cruzamento de Médias (9x21)"
+    
+    try:
+        bot.send_message(CHAT_ID, msg, reply_markup=markup, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Erro Telegram: {e}")
 
 def analisar_mercado():
-    limpar_cache_yahoo()
-    hora_atual = datetime.now().strftime('%H:%M')
-    print(f"\n--- Iniciando Varredura ({hora_atual}) ---")
-    
-    sessao_fake = criar_sessao_disfarce()
-    msg_relatorio = f"🔍 Monitor Cloud ({hora_atual})\n\n"
-    oportunidades = 0
+    while True:
+        hora_atual = datetime.now().strftime('%H:%M')
+        print(f"\n--- Varredura Iniciada ({hora_atual}) ---")
+        
+        # Limpa cache para evitar dados velhos
+        cache_path = Path.home() / ".cache" / "py-yfinance"
+        if cache_path.exists(): shutil.rmtree(cache_path)
 
-    for ativo in CARTEIRA:
-        try:
-            ticker = yf.Ticker(ativo, session=sessao_fake)
-            df = ticker.history(period="6mo")
-            
-            if df.empty: 
+        encontrou_algo = False
+
+        for ativo in CARTEIRA:
+            try:
                 ticker = yf.Ticker(ativo)
                 df = ticker.history(period="6mo")
+                
+                if len(df) < 22: continue
+                
+                # Cálculo das Médias
+                media_curta = ta.sma(df['Close'], length=9).iloc[-1]
+                media_longa = ta.sma(df['Close'], length=21).iloc[-1]
+                media_curta_ontem = ta.sma(df['Close'], length=9).iloc[-2]
+                media_longa_ontem = ta.sma(df['Close'], length=21).iloc[-2]
+                preco_atual = df['Close'].iloc[-1]
+                
+                # LÓGICA DE GATILHO:
+                # Só avisa se cruzou HOJE (ontem estava baixo, hoje está alto)
+                cruzou_pra_cima = (media_curta > media_longa) and (media_curta_ontem <= media_longa_ontem)
+                
+                if cruzou_pra_cima:
+                    print(f"🚀 {ativo}: DISPARANDO ALERTA")
+                    enviar_alerta_com_botao(ativo, preco_atual)
+                    encontrou_algo = True
+                
+                time.sleep(2) # Pausa leve entre ativos
 
-            if df.empty or len(df) < 22: continue
-            
-            # Estratégia: Média 9 cruzando Média 21
-            media_curta = ta.sma(df['Close'], length=9).iloc[-1]
-            media_longa = ta.sma(df['Close'], length=21).iloc[-1]
-            preco_atual = df['Close'].iloc[-1]
-            
-            if media_curta > media_longa:
-                oportunidades += 1
-                var_dia = ((preco_atual - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
-                msg_relatorio += f"🟢 {ativo} | {preco_atual:.2f} ({var_dia:+.1f}%)\n"
-                print(f"✅ {ativo}: ALTA")
-            
-            time.sleep(random.randint(2, 5)) 
+            except Exception as e:
+                print(f"Erro em {ativo}: {e}")
 
-        except Exception as e:
-            print(f"❌ Erro {ativo}: {e}")
+        if not encontrou_algo:
+             # Heartbeat simples (sem botão) só para avisar que está vivo
+             bot.send_message(CHAT_ID, f"📉 Monitor ({hora_atual}): Mercado calmo. Sigo vigiando.")
 
-    # --- AQUI ESTÁ A MUDANÇA (HEARTBEAT) ---
-    if oportunidades > 0:
-        msg_relatorio += "\n🚀 Verifique o Gráfico!"
-        enviar_telegram(msg_relatorio)
-    else:
-        # Agora ele avisa que está vivo, mesmo sem oportunidades
-        msg_quiet = f"📉 Status ({hora_atual}): Mercado lateral.\nNenhuma entrada agora, mas sigo vigiando."
-        enviar_telegram(msg_quiet)
+        print("Dormindo 60 minutos...")
+        time.sleep(3600)
 
 # ==============================================================================
-# 4. EXECUÇÃO FINAL
+# 5. O CORAÇÃO (SERVIDOR WEB + THREADS)
 # ==============================================================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Robô Trader v5.0 - Com Google Sheets e Botões!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
 if __name__ == "__main__":
-    iniciar_servidor_fake()
-    
-    print("✅ Robô Iniciado (Modo Tagarela)!")
-    enviar_telegram("🤖 Atualização Recebida!\nAgora avisarei a cada 60min, aconteça o que acontecer.")
+    # 1. Inicia o Servidor Web (para o Render) em uma linha paralela
+    t_flask = threading.Thread(target=run_flask)
+    t_flask.start()
 
-    while True:
-        analisar_mercado()
-        print(f"Dormindo por {INTERVALO_VARREDURA} minutos...")
-        time.sleep(INTERVALO_VARREDURA * 60)
+    # 2. Inicia o Scanner de Mercado em outra linha paralela
+    t_market = threading.Thread(target=analisar_mercado)
+    t_market.start()
+
+    print("✅ Robô Iniciado! Escutando Telegram...")
+    bot.send_message(CHAT_ID, "🤖 Monitor v5.0 Online!\nAgora com botões de registro no Planilhas.")
+    
+    # 3. O programa principal fica aqui ESCUTANDO os botões eternamente
+    bot.infinity_polling()
