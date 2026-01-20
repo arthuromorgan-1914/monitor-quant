@@ -1,175 +1,216 @@
 import os
 import shutil
-import telebot # A nova biblioteca de botões
+import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import gspread # O carteiro do Google
+import gspread
 import yfinance as yf
 import pandas_ta as ta
 import time
-import random
 import threading
 from flask import Flask
 from datetime import datetime
 from pathlib import Path
 
 # ==============================================================================
-# 1. CONFIGURAÇÕES (PREENCHA AQUI!)
+# 1. CONFIGURAÇÕES
 # ==============================================================================
-TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"      
+TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"  
-NOME_PLANILHA_GOOGLE = "Trades do Robô Quant" # Nome exato da sua planilha
+NOME_PLANILHA_GOOGLE = "Trades do Robô Quant" 
 
-# Ativos para monitorar
-CARTEIRA = [
-    # Cripto (24h)
-    "BTC-USD", "ETH-USD", "SOL-USD", 
-    "LINK-USD", "AVAX-USD", "ADA-USD", "XRP-USD", # <-- As novas Altcoins
-    
-    # Ações Brasil (B3)
-    "PETR4.SA", "VALE3.SA", "WEGE3.SA", "PRIO3.SA",
-    
-    # Ações EUA (Tech & Quantum)
-    "AAPL", "NVDA", "MSFT", "TSLA",
-    "IONQ", "RGTI" # <-- As novas de Quantum
-]
-
-# Conecta ao Bot do Telegram
 bot = telebot.TeleBot(TOKEN)
 
 # ==============================================================================
-# 2. SISTEMA GOOGLE SHEETS (O ESCRITURÁRIO)
+# 2. FUNÇÕES DO GOOGLE SHEETS (O CÉREBRO)
 # ==============================================================================
-def registrar_na_planilha(ativo, tipo, preco):
+def conectar_google():
     try:
-        # Conecta usando o arquivo creds.json que está na pasta
         gc = gspread.service_account(filename='creds.json')
         sh = gc.open(NOME_PLANILHA_GOOGLE)
-        worksheet = sh.sheet1 # Primeira aba
-        
-        data_hoje = datetime.now().strftime('%d/%m/%Y %H:%M')
-        
-        # Adiciona a linha nova
-        # Colunas: Data | Ativo | Tipo | Preço Entrada | Preço Saída | Resultado | Status
-        worksheet.append_row([data_hoje, ativo, tipo, preco, "", "", "Aberta"])
-        return True
+        return sh
     except Exception as e:
-        print(f"❌ Erro Google: {e}")
-        return False
+        print(f"❌ Erro ao conectar Google: {e}")
+        return None
+
+def ler_carteira_do_sheets():
+    sh = conectar_google()
+    if sh:
+        try:
+            worksheet = sh.worksheet("Carteira") # Busca a aba 'Carteira'
+            lista = worksheet.col_values(1) # Lê a coluna A inteira
+            # Filtra linhas vazias se houver
+            lista = [x.upper().strip() for x in lista if x.strip()]
+            return lista
+        except:
+            print("⚠️ Aba 'Carteira' não encontrada. Usando lista de emergência.")
+            return ["BTC-USD", "ETH-USD"] # Backup
+    return []
+
+def adicionar_ativo_sheets(novo_ativo):
+    sh = conectar_google()
+    if sh:
+        try:
+            worksheet = sh.worksheet("Carteira")
+            # Verifica se já existe para não duplicar
+            lista_atual = worksheet.col_values(1)
+            if novo_ativo in lista_atual:
+                return "Já existe"
+            
+            worksheet.append_row([novo_ativo])
+            return "Sucesso"
+        except Exception as e:
+            return f"Erro: {e}"
+    return "Erro Conexão"
+
+def remover_ativo_sheets(ativo_remover):
+    sh = conectar_google()
+    if sh:
+        try:
+            worksheet = sh.worksheet("Carteira")
+            cell = worksheet.find(ativo_remover)
+            if cell:
+                worksheet.delete_rows(cell.row)
+                return "Sucesso"
+            else:
+                return "Não encontrado"
+        except Exception as e:
+            return f"Erro: {e}"
+    return "Erro Conexão"
+
+def registrar_trade_sheets(ativo, tipo, preco):
+    sh = conectar_google()
+    if sh:
+        try:
+            worksheet = sh.sheet1 # Primeira aba (Log de Trades)
+            data_hoje = datetime.now().strftime('%d/%m/%Y %H:%M')
+            worksheet.append_row([data_hoje, ativo, tipo, preco, "", "", "Aberta"])
+            return True
+        except:
+            return False
+    return False
 
 # ==============================================================================
-# 3. O OUVIDO DO ROBÔ (ESCUTA OS BOTÕES)
+# 3. COMANDOS DO TELEGRAM (INTERAÇÃO)
 # ==============================================================================
+
+@bot.message_handler(commands=['ativos', 'lista'])
+def comando_listar(message):
+    carteira_atual = ler_carteira_do_sheets()
+    qtd = len(carteira_atual)
+    texto = f"📋 **Carteira Monitorada ({qtd}):**\n\n"
+    for ativo in carteira_atual:
+        texto += f"• `{ativo}`\n"
+    texto += "\nPara adicionar: /add CODIGO\nPara remover: /del CODIGO"
+    bot.reply_to(message, texto, parse_mode="Markdown")
+
+@bot.message_handler(commands=['add'])
+def comando_adicionar(message):
+    try:
+        # Pega o texto depois do comando. Ex: "/add WEGE3.SA" -> "WEGE3.SA"
+        novo_ativo = message.text.split()[1].upper().strip()
+        bot.reply_to(message, f"⏳ Adicionando {novo_ativo} na planilha...")
+        
+        resultado = adicionar_ativo_sheets(novo_ativo)
+        
+        if resultado == "Sucesso":
+            bot.reply_to(message, f"✅ **{novo_ativo}** adicionado! Será analisado no próximo ciclo.")
+        elif resultado == "Já existe":
+            bot.reply_to(message, f"⚠️ {novo_ativo} já está na lista.")
+        else:
+            bot.reply_to(message, f"❌ Erro: {resultado}")
+    except:
+        bot.reply_to(message, "Use assim: `/add PETR4.SA`", parse_mode="Markdown")
+
+@bot.message_handler(commands=['del', 'remove'])
+def comando_remover(message):
+    try:
+        ativo_remover = message.text.split()[1].upper().strip()
+        bot.reply_to(message, f"⏳ Removendo {ativo_remover}...")
+        
+        resultado = remover_ativo_sheets(ativo_remover)
+        
+        if resultado == "Sucesso":
+            bot.reply_to(message, f"🗑️ **{ativo_remover}** removido da lista.")
+        elif resultado == "Não encontrado":
+            bot.reply_to(message, f"⚠️ {ativo_remover} não estava na lista.")
+        else:
+            bot.reply_to(message, f"❌ Erro: {resultado}")
+    except:
+        bot.reply_to(message, "Use assim: `/del PETR4.SA`", parse_mode="Markdown")
+
+# Handler do Botão de Compra
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    # O botão manda dados assim: "COMPRA|PETR4.SA|30.50"
     dados = call.data.split("|")
-    acao = dados[0]
-    ativo = dados[1]
-    preco = dados[2]
-
-    if acao == "COMPRA":
-        bot.answer_callback_query(call.id, "Registrando na planilha...")
-        
-        sucesso = registrar_na_planilha(ativo, "Compra Simulada", preco)
-        
-        if sucesso:
-            # Edita a mensagem para mostrar que deu certo
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"{call.message.text}\n\n✅ REGISTRADO NA PLANILHA!"
-            )
+    if dados[0] == "COMPRA":
+        bot.answer_callback_query(call.id, "Registrando...")
+        if registrar_trade_sheets(dados[1], "Compra Simulada", dados[2]):
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                text=f"{call.message.text}\n\n✅ REGISTRADO NA PLANILHA!")
         else:
-            bot.answer_callback_query(call.id, "❌ Erro ao salvar na planilha.")
+            bot.answer_callback_query(call.id, "❌ Erro ao salvar.")
 
 # ==============================================================================
-# 4. O CÉREBRO ANALÍTICO (LOOP DE MERCADO)
+# 4. LOOP DE ANÁLISE (SCANNER)
 # ==============================================================================
-def enviar_alerta_com_botao(ativo, preco):
+def enviar_alerta(ativo, preco):
     markup = InlineKeyboardMarkup()
-    # Cria o botão com os dados escondidos (COMPRA|ATIVO|PRECO)
-    botao = InlineKeyboardButton(
-        text=f"📝 Simular Compra @ {preco:.2f}", 
-        callback_data=f"COMPRA|{ativo}|{preco:.2f}"
-    )
+    botao = InlineKeyboardButton(text=f"📝 Simular Compra @ {preco:.2f}", callback_data=f"COMPRA|{ativo}|{preco:.2f}")
     markup.add(botao)
-    
-    msg = f"🟢 **OPORTUNIDADE DETECTADA**\n\nAtivo: {ativo}\nPreço: {preco:.2f}\nSetup: Cruzamento de Médias (9x21)"
-    
-    try:
-        bot.send_message(CHAT_ID, msg, reply_markup=markup, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Erro Telegram: {e}")
+    bot.send_message(CHAT_ID, f"🟢 **OPORTUNIDADE**\n\nAtivo: {ativo}\nPreço: {preco:.2f}\nCruzamento de Médias", reply_markup=markup, parse_mode="Markdown")
 
 def analisar_mercado():
     while True:
-        hora_atual = datetime.now().strftime('%H:%M')
-        print(f"\n--- Varredura Iniciada ({hora_atual}) ---")
+        hora = datetime.now().strftime('%H:%M')
+        print(f"\n--- Ciclo {hora} ---")
         
-        # Limpa cache para evitar dados velhos
-        cache_path = Path.home() / ".cache" / "py-yfinance"
-        if cache_path.exists(): shutil.rmtree(cache_path)
+        # 1. ATUALIZA A LISTA DIRETO DA PLANILHA NO INÍCIO DE CADA CICLO
+        carteira_vigente = ler_carteira_do_sheets()
+        print(f"Ativos carregados: {len(carteira_vigente)}")
 
-        encontrou_algo = False
+        cache = Path.home() / ".cache" / "py-yfinance"
+        if cache.exists(): shutil.rmtree(cache)
 
-        for ativo in CARTEIRA:
+        encontrou = False
+        for ativo in carteira_vigente:
             try:
-                ticker = yf.Ticker(ativo)
-                df = ticker.history(period="6mo")
+                # Validação rápida de string vazia
+                if len(ativo) < 3: continue
                 
+                df = yf.Ticker(ativo).history(period="6mo")
                 if len(df) < 22: continue
                 
-                # Cálculo das Médias
-                media_curta = ta.sma(df['Close'], length=9).iloc[-1]
-                media_longa = ta.sma(df['Close'], length=21).iloc[-1]
-                media_curta_ontem = ta.sma(df['Close'], length=9).iloc[-2]
-                media_longa_ontem = ta.sma(df['Close'], length=21).iloc[-2]
-                preco_atual = df['Close'].iloc[-1]
+                sma9 = ta.sma(df['Close'], length=9).iloc[-1]
+                sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+                sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
+                sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                 
-                # LÓGICA DE GATILHO:
-                # Só avisa se cruzou HOJE (ontem estava baixo, hoje está alto)
-                cruzou_pra_cima = (media_curta > media_longa) and (media_curta_ontem <= media_longa_ontem)
+                if (sma9 > sma21) and (sma9_prev <= sma21_prev):
+                    enviar_alerta(ativo, df['Close'].iloc[-1])
+                    encontrou = True
                 
-                if cruzou_pra_cima:
-                    print(f"🚀 {ativo}: DISPARANDO ALERTA")
-                    enviar_alerta_com_botao(ativo, preco_atual)
-                    encontrou_algo = True
-                
-                time.sleep(2) # Pausa leve entre ativos
-
+                time.sleep(1.5)
             except Exception as e:
-                print(f"Erro em {ativo}: {e}")
+                print(f"Erro {ativo}: {e}")
 
-        if not encontrou_algo:
-             # Heartbeat simples (sem botão) só para avisar que está vivo
-             bot.send_message(CHAT_ID, f"📉 Monitor ({hora_atual}): Mercado calmo. Sigo vigiando.")
+        if not encontrou:
+             bot.send_message(CHAT_ID, f"📉 Monitor ({hora}): Nada nas {len(carteira_vigente)} ações. Vigia Segue.")
 
         print("Dormindo 60 minutos...")
         time.sleep(3600)
 
 # ==============================================================================
-# 5. O CORAÇÃO (SERVIDOR WEB + THREADS)
+# 5. SERVIDOR WEB
 # ==============================================================================
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "Robô Trader v5.0 - Com Google Sheets e Botões!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+def home(): return "Robô v6.0 - Gerenciamento Dinâmico"
 
 if __name__ == "__main__":
-    # 1. Inicia o Servidor Web (para o Render) em uma linha paralela
-    t_flask = threading.Thread(target=run_flask)
+    t_flask = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000))))
     t_flask.start()
-
-    # 2. Inicia o Scanner de Mercado em outra linha paralela
+    
     t_market = threading.Thread(target=analisar_mercado)
     t_market.start()
-
-    print("✅ Robô Iniciado! Escutando Telegram...")
-    bot.send_message(CHAT_ID, "🤖 Monitor v5.0 Online!\nAgora com botões de registro no Planilhas.")
     
-    # 3. O programa principal fica aqui ESCUTANDO os botões eternamente
     bot.infinity_polling()
