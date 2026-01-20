@@ -196,8 +196,8 @@ def analisar_mercado():
         if not encontrou:
              bot.send_message(CHAT_ID, f"📉 Monitor ({hora}): Nada nas {len(carteira_vigente)} ações. Vigia Segue.")
 
-        print("Dormindo 60 minutos...")
-        time.sleep(3600)
+        print("Dormindo 15 minutos...")
+        time.sleep(900)
 
 # ==============================================================================
 # 5. SERVIDOR WEB
