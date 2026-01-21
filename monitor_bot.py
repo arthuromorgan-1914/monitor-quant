@@ -154,11 +154,20 @@ def callback_query(call):
 # 4. LOOP DE ANÁLISE (SCANNER)
 # ==============================================================================
 def enviar_alerta(ativo, preco):
+    # Formatação condicional: se for menor que 1 (crypto), usa 8 casas. Se for maior, usa 2.
+    preco_formatado = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
+    
     markup = InlineKeyboardMarkup()
-    botao = InlineKeyboardButton(text=f"📝 Simular Compra @ {preco:.2f}", callback_data=f"COMPRA|{ativo}|{preco:.2f}")
+    # No botão e no callback, usamos o preço formatado corretamente
+    botao = InlineKeyboardButton(text=f"📝 Simular Compra @ {preco_formatado}", callback_data=f"COMPRA|{ativo}|{preco_formatado}")
     markup.add(botao)
-    bot.send_message(CHAT_ID, f"🟢 **OPORTUNIDADE**\n\nAtivo: {ativo}\nPreço: {preco:.2f}\nCruzamento de Médias", reply_markup=markup, parse_mode="Markdown")
-
+    
+    bot.send_message(
+        CHAT_ID, 
+        f"🟢 **OPORTUNIDADE**\n\nAtivo: {ativo}\nPreço: {preco_formatado}\nCruzamento de Médias", 
+        reply_markup=markup, 
+        parse_mode="Markdown"
+    )
 def analisar_mercado():
     while True:
         hora = datetime.now().strftime('%H:%M')
