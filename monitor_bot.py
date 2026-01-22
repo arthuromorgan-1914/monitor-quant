@@ -151,7 +151,7 @@ def executar_hunter():
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
                 # Atualizado para a versão vigente em 2026
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
                 prompt = f"Resuma o sentimento do mercado em 1 frase curta baseada nestas manchetes: {manchetes}"
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 
