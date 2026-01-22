@@ -119,11 +119,12 @@ def registrar_trade(ativo, preco):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER)
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - VERSÃO DIAGNÓSTICO
 # ==============================================================================
 def executar_hunter():
     relatorio = []
     novos = 0
+    
     # 1. Scanner Técnico
     for alvo in ALVOS_CAÇADOR:
         try:
@@ -136,7 +137,34 @@ def executar_hunter():
                     novos += 1
                 else:
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-        except: pass
+        except Exception as e:
+            relatorio.append(f"Erro {alvo['symbol']}: {e}")
+            
+    # 2. Notícias (Gemini) - COM LOG DE ERRO DETALHADO
+    sentimento = "Iniciando..."
+    if not GEMINI_KEY:
+        sentimento = "Erro: Chave GEMINI_API_KEY não encontrada no Render."
+    else:
+        try:
+            manchetes = []
+            # Tenta ler as notícias
+            for url in ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]:
+                d = feedparser.parse(url)
+                if d.entries:
+                    for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
+            
+            if not manchetes:
+                sentimento = "Aviso: Não consegui baixar nenhuma notícia (RSS vazio)."
+            else:
+                # Tenta chamar o Gemini
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
+                sentimento = resp.text.strip()
+                
+        except Exception as e:
+            sentimento = f"Erro Técnico: {str(e)}"
+
+    return relatorio, sentimento, novos
             
     # 2. Notícias (Gemini)
     sentimento = "Sem IA"
