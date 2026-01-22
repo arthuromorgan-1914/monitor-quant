@@ -14,7 +14,7 @@ from pathlib import Path
 import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
-import requests  # <--- NOVA IMPORTAÇÃO ESSENCIAL
+import requests  # Biblioteca para conexão direta (sem bugs de versão)
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -50,7 +50,7 @@ ALVOS_CAÇADOR = [
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES DE DADOS
+# 2. FUNÇÕES DE DADOS (BINANCE & YAHOO)
 # ==============================================================================
 def pegar_dados_binance(symbol):
     symbol_binance = symbol.replace("-", "/").replace("USD", "USDT")
@@ -72,7 +72,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS
+# 3. FUNÇÕES DO SHEETS (BANCO DE DADOS)
 # ==============================================================================
 def conectar_google():
     try:
@@ -113,7 +113,7 @@ def registrar_trade(ativo, preco):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - MODO DIRETO (REST API)
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - API DIRETA E ESTÁVEL
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -134,7 +134,7 @@ def executar_hunter():
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             
-    # 2. Notícias (Gemini VIA API DIRETA)
+    # 2. Notícias (Gemini VIA API DIRETA v1)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -142,26 +142,42 @@ def executar_hunter():
         try:
             manchetes = []
             feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
-            for url in feeds:
-                d = feedparser.parse(url)
-                if d.entries:
-                    for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
+            
+            # Timeout curto para RSS não travar
+            try:
+                for url in feeds:
+                    d = feedparser.parse(url)
+                    if d.entries:
+                        for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
+            except: pass
             
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                # Atualizado para a versão vigente em 2026
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key={GEMINI_KEY}"
-                prompt = f"Resuma o sentimento do mercado em 1 frase curta baseada nestas manchetes: {manchetes}"
+                # --- MUDANÇA CRÍTICA: API v1 (Estável) + gemini-pro ---
+                url_google = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={GEMINI_KEY}"
+                
+                prompt = f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}"
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 
-                resp = requests.post(url_google, json=payload, timeout=10)
+                # Timeout de 5s para não travar o Telegram se o Google demorar
+                resp = requests.post(url_google, json=payload, timeout=5)
                 
                 if resp.status_code == 200:
-                    sentimento = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                    try:
+                        dados = resp.json()
+                        sentimento = dados['candidates'][0]['content']['parts'][0]['text']
+                    except:
+                        sentimento = "Erro ao ler resposta da IA."
+                elif resp.status_code == 429:
+                    sentimento = "⚠️ Cota da IA excedida (Tente mais tarde)."
+                elif resp.status_code == 404:
+                    sentimento = "⚠️ Modelo IA não encontrado (Verificar API)."
                 else:
-                    sentimento = f"Erro Google ({resp.status_code}): {resp.text[:100]}"
+                    sentimento = f"Erro Google ({resp.status_code})"
                     
+        except requests.exceptions.Timeout:
+            sentimento = "⚠️ IA demorou demais (Timeout)."
         except Exception as e:
             sentimento = f"Erro Técnico: {str(e)}"
 
@@ -179,24 +195,31 @@ def menu_principal(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_geral(call):
-    if call.data.startswith("COMPRA|"):
-        _, ativo, preco = call.data.split("|")
-        if registrar_trade(ativo, preco):
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
-    
-    elif call.data == "CMD_HUNTER":
-        bot.answer_callback_query(call.id, "Buscando...")
-        bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado...**")
-        achados, humor, n = executar_hunter()
-        txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
-        txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
-        txt += f"\n\n🔢 Novos: {n}"
-        bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+    try:
+        if call.data.startswith("COMPRA|"):
+            _, ativo, preco = call.data.split("|")
+            if registrar_trade(ativo, preco):
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
         
-    elif call.data == "CMD_LISTA":
-        lista = ler_carteira()
-        txt = f"📋 **Vigiando {len(lista)}:**\n" + "\n".join([f"`{x}`" for x in lista])
-        bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+        elif call.data == "CMD_HUNTER":
+            # Avisa o telegram que recebeu o clique para tirar o "reloginho" do botão
+            bot.answer_callback_query(call.id, "Buscando...")
+            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado...**")
+            
+            # Executa a busca
+            achados, humor, n = executar_hunter()
+            
+            txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
+            txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
+            txt += f"\n\n🔢 Novos: {n}"
+            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+            
+        elif call.data == "CMD_LISTA":
+            lista = ler_carteira()
+            txt = f"📋 **Vigiando {len(lista)}:**\n" + "\n".join([f"`{x}`" for x in lista])
+            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Erro Callback: {e}")
 
 @bot.message_handler(commands=['add'])
 def add_manual(m):
