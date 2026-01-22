@@ -113,7 +113,7 @@ def registrar_trade(ativo, preco):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - COM DIAGNÓSTICO AUTO
+# 4. FUNÇÃO DO CAÇADOR (HUNTER)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -134,7 +134,7 @@ def executar_hunter():
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             
-    # 2. Notícias (Gemini COM DIAGNÓSTICO)
+    # 2. Notícias
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -143,4 +143,135 @@ def executar_hunter():
             manchetes = []
             feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
             try:
-                for url in feeds
+                # CORREÇÃO AQUI: Adicionado o ':' no final do for
+                for url in feeds:
+                    d = feedparser.parse(url)
+                    if d.entries:
+                        for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
+            except: pass
+            
+            if not manchetes:
+                sentimento = "Aviso: Sem notícias no RSS."
+            else:
+                # Tenta o modelo 1.5 Flash na v1beta
+                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+                
+                prompt = f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}"
+                payload = {"contents": [{"parts": [{"text": prompt}]}]}
+                
+                resp = requests.post(url_google, json=payload, timeout=8)
+                
+                if resp.status_code == 200:
+                    try:
+                        dados = resp.json()
+                        sentimento = dados['candidates'][0]['content']['parts'][0]['text']
+                    except:
+                        sentimento = "Erro ao ler JSON da IA."
+                
+                # --- DIAGNÓSTICO DE MODELOS ---
+                elif resp.status_code == 404:
+                    try:
+                        url_list = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
+                        r_list = requests.get(url_list, timeout=5)
+                        if r_list.status_code == 200:
+                            lista = r_list.json().get('models', [])
+                            nomes = [m['name'].replace('models/', '') for m in lista if 'gemini' in m['name']]
+                            sentimento = f"⚠️ Erro 404. Use um destes: {', '.join(nomes[:3])}"
+                        else:
+                            sentimento = "⚠️ Erro 404 e falha ao listar."
+                    except:
+                        sentimento = "⚠️ Erro 404 (Modelo desconhecido)."
+                
+                elif resp.status_code == 429:
+                    sentimento = "⚠️ Cota da IA excedida (Aguarde)."
+                else:
+                    sentimento = f"Erro Google ({resp.status_code})"
+                    
+        except requests.exceptions.Timeout:
+            sentimento = "⚠️ Timeout (Google demorou)."
+        except Exception as e:
+            sentimento = f"Erro Técnico: {str(e)}"
+
+    return relatorio, sentimento, novos
+
+# ==============================================================================
+# 5. BOT TELEGRAM
+# ==============================================================================
+@bot.message_handler(commands=['start', 'menu', 'status'])
+def menu_principal(message):
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("🔫 Caçar Oportunidades (Hunter)", callback_data="CMD_HUNTER"))
+    markup.row(InlineKeyboardButton("📋 Ver Lista de Vigília", callback_data="CMD_LISTA"))
+    bot.reply_to(message, "🤖 **Painel Quant**\nO que deseja?", reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_geral(call):
+    try:
+        if call.data.startswith("COMPRA|"):
+            _, ativo, preco = call.data.split("|")
+            if registrar_trade(ativo, preco):
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
+        
+        elif call.data == "CMD_HUNTER":
+            bot.answer_callback_query(call.id, "Buscando...")
+            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado...**")
+            achados, humor, n = executar_hunter()
+            txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
+            txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
+            txt += f"\n\n🔢 Novos: {n}"
+            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+            
+        elif call.data == "CMD_LISTA":
+            lista = ler_carteira()
+            txt = f"📋 **Vigiando {len(lista)}:**\n" + "\n".join([f"`{x}`" for x in lista])
+            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Erro Callback: {e}")
+
+@bot.message_handler(commands=['add'])
+def add_manual(m):
+    try: bot.reply_to(m, f"Resultado: {adicionar_ativo(m.text.split()[1].upper())}")
+    except: bot.reply_to(m, "Use: /add ATIVO")
+
+# ==============================================================================
+# 6. LOOP MONITOR
+# ==============================================================================
+def loop_monitoramento():
+    while True:
+        try:
+            print(f"--- Ciclo {datetime.now().strftime('%H:%M')} ---")
+            carteira = ler_carteira()
+            cache = Path.home() / ".cache" / "py-yfinance"
+            if cache.exists(): shutil.rmtree(cache)
+
+            for ativo in carteira:
+                try:
+                    if "USD" in ativo: df = pegar_dados_binance(ativo)
+                    else: df = pegar_dados_yahoo(ativo)
+
+                    if df is None or len(df) < 25: continue
+                    
+                    sma9 = ta.sma(df['Close'], length=9).iloc[-1]
+                    sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+                    sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
+                    sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
+                    
+                    if (sma9 > sma21) and (sma9_prev <= sma21_prev):
+                        preco = df['Close'].iloc[-1]
+                        fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
+                        markup = InlineKeyboardMarkup()
+                        markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
+                        bot.send_message(CHAT_ID, f"🟢 **OPORTUNIDADE**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento 9x21", reply_markup=markup, parse_mode="Markdown")
+                    time.sleep(1)
+                except: pass
+            time.sleep(900)
+        except: time.sleep(60)
+
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Robô Quant Diagnóstico 🚀"
+
+if __name__ == "__main__":
+    threading.Thread(target=loop_monitoramento).start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
+    bot.infinity_polling()
