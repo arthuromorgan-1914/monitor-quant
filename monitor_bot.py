@@ -113,7 +113,7 @@ def registrar_trade(ativo, preco):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER)
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - MODELO 2.0 + FREIO ABS
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -131,8 +131,13 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
+            
+            # --- MUDANÇA CRÍTICA: PAUSA PARA NÃO TOMAR BLOCK (429) ---
+            time.sleep(2) 
+            
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
+            time.sleep(2) # Pausa mesmo se der erro
             
     # 2. Notícias
     sentimento = "Iniciando..."
@@ -143,7 +148,6 @@ def executar_hunter():
             manchetes = []
             feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
             try:
-                # CORREÇÃO AQUI: Adicionado o ':' no final do for
                 for url in feeds:
                     d = feedparser.parse(url)
                     if d.entries:
@@ -153,8 +157,9 @@ def executar_hunter():
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                # Tenta o modelo 1.5 Flash na v1beta
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+                # --- MUDANÇA CRÍTICA: USANDO O MODELO QUE A SUA CONTA PERMITE ---
+                # O erro anterior nos disse para usar: gemini-2.0-flash-exp
+                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
                 
                 prompt = f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}"
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -167,21 +172,6 @@ def executar_hunter():
                         sentimento = dados['candidates'][0]['content']['parts'][0]['text']
                     except:
                         sentimento = "Erro ao ler JSON da IA."
-                
-                # --- DIAGNÓSTICO DE MODELOS ---
-                elif resp.status_code == 404:
-                    try:
-                        url_list = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
-                        r_list = requests.get(url_list, timeout=5)
-                        if r_list.status_code == 200:
-                            lista = r_list.json().get('models', [])
-                            nomes = [m['name'].replace('models/', '') for m in lista if 'gemini' in m['name']]
-                            sentimento = f"⚠️ Erro 404. Use um destes: {', '.join(nomes[:3])}"
-                        else:
-                            sentimento = "⚠️ Erro 404 e falha ao listar."
-                    except:
-                        sentimento = "⚠️ Erro 404 (Modelo desconhecido)."
-                
                 elif resp.status_code == 429:
                     sentimento = "⚠️ Cota da IA excedida (Aguarde)."
                 else:
@@ -213,8 +203,8 @@ def callback_geral(call):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
         
         elif call.data == "CMD_HUNTER":
-            bot.answer_callback_query(call.id, "Buscando...")
-            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado...**")
+            bot.answer_callback_query(call.id, "Buscando... (Isso leva uns 30s)")
+            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado com Calma...**\n(Aguarde, estou consultando ativo por ativo para evitar bloqueios)")
             achados, humor, n = executar_hunter()
             txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
             txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
@@ -269,7 +259,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô Quant Diagnóstico 🚀"
+def home(): return "Robô Quant V6 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
