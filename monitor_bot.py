@@ -148,7 +148,7 @@ def executar_hunter():
                 for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
             
             if manchetes:
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
                 sentimento = resp.text.strip()
         except: pass
