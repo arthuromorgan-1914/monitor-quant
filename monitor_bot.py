@@ -38,13 +38,13 @@ ALVOS_CAÇADOR = [
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
-    # CRIPTO (Binance)
-    {"symbol": "BTCUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
-    {"symbol": "ETHUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
-    {"symbol": "SOLUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
-    {"symbol": "DOGEUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "DOGE-USD"},
-    {"symbol": "SHIBUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SHIB-USD"},
-    {"symbol": "XRPUSD", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "XRP-USD"},
+# CRIPTO (Binance - Usar USDT para TradingView achar)
+    {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
+    {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
+    {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
+    {"symbol": "DOGEUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "DOGE-USD"},
+    {"symbol": "SHIBUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SHIB-USD"},
+    {"symbol": "XRPUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "XRP-USD"},
     # EUA
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
@@ -157,7 +157,7 @@ def executar_hunter():
                 sentimento = "Aviso: Não consegui baixar nenhuma notícia (RSS vazio)."
             else:
                 # Tenta chamar o Gemini
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-pro')
                 resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
                 sentimento = resp.text.strip()
                 
@@ -176,7 +176,7 @@ def executar_hunter():
                 for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
             
             if manchetes:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-pro')
                 resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
                 sentimento = resp.text.strip()
         except: pass
