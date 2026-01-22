@@ -23,29 +23,31 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# Pega a chave do Gemini do ambiente (Render) ou usa vazia se não tiver
+# Configura IA (Gemini)
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 
 bot = telebot.TeleBot(TOKEN)
 
-# LISTA DE ALVOS PARA O CAÇADOR (HUNTER)
+# LISTA DE CAÇA (Atualizada com USDT para Cripto)
 ALVOS_CAÇADOR = [
-    # BRASIL
+    # BRASIL (B3)
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
     {"symbol": "VALE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "VALE3.SA"},
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
-# CRIPTO (Binance - Usar USDT para TradingView achar)
+    
+    # CRIPTO (Binance - Use USDT para TradingView)
     {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
     {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
     {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
     {"symbol": "DOGEUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "DOGE-USD"},
     {"symbol": "SHIBUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SHIB-USD"},
     {"symbol": "XRPUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "XRP-USD"},
-    # EUA
+    
+    # EUA (Nasdaq)
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
     {"symbol": "AAPL", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "AAPL"},
@@ -119,7 +121,7 @@ def registrar_trade(ativo, preco):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - VERSÃO DIAGNÓSTICO
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - COM DIAGNÓSTICO
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -130,56 +132,39 @@ def executar_hunter():
         try:
             handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
             rec = handler.get_analysis().summary['RECOMMENDATION']
+            
             if "STRONG_BUY" in rec:
                 res = adicionar_ativo(alvo['nome_sheet'])
                 if res == "Sucesso":
                     relatorio.append(f"✅ {alvo['symbol']} (Novo!)")
                     novos += 1
-                else:
+                elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             
-    # 2. Notícias (Gemini) - COM LOG DE ERRO DETALHADO
+    # 2. Notícias (Gemini)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
-        sentimento = "Erro: Chave GEMINI_API_KEY não encontrada no Render."
+        sentimento = "Erro: Chave GEMINI_API_KEY não configurada no Render."
     else:
         try:
             manchetes = []
-            # Tenta ler as notícias
-            for url in ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]:
+            feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
+            for url in feeds:
                 d = feedparser.parse(url)
                 if d.entries:
                     for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
             
             if not manchetes:
-                sentimento = "Aviso: Não consegui baixar nenhuma notícia (RSS vazio)."
+                sentimento = "Aviso: RSS de notícias vazio ou bloqueado."
             else:
-                # Tenta chamar o Gemini
-                model = genai.GenerativeModel('gemini-pro')
-                resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
+                # Tenta usar o modelo Flash atualizado
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta baseada nestas manchetes: {manchetes}")
                 sentimento = resp.text.strip()
-                
         except Exception as e:
-            sentimento = f"Erro Técnico: {str(e)}"
-
-    return relatorio, sentimento, novos
-            
-    # 2. Notícias (Gemini)
-    sentimento = "Sem IA"
-    if GEMINI_KEY:
-        try:
-            manchetes = []
-            for url in ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]:
-                d = feedparser.parse(url)
-                for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
-            
-            if manchetes:
-                model = genai.GenerativeModel('gemini-pro')
-                resp = model.generate_content(f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}")
-                sentimento = resp.text.strip()
-        except: pass
+            sentimento = f"Erro IA: {str(e)}"
 
     return relatorio, sentimento, novos
 
@@ -196,16 +181,14 @@ def menu_principal(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_geral(call):
-    # Botão de Registrar Trade
     if call.data.startswith("COMPRA|"):
         _, ativo, preco = call.data.split("|")
         if registrar_trade(ativo, preco):
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
     
-    # Botão do Hunter
     elif call.data == "CMD_HUNTER":
         bot.answer_callback_query(call.id, "Iniciando varredura...")
-        bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para trabalhar...**\nAnalisando B3, Cripto e EUA. Aguarde.")
+        bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para trabalhar...**\nAnalisando Mercado. Aguarde...")
         achados, humor, n = executar_hunter()
         
         txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
@@ -216,7 +199,6 @@ def callback_geral(call):
         txt += f"\n\n🔢 Novos adicionados: {n}"
         bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
         
-    # Botão de Lista
     elif call.data == "CMD_LISTA":
         lista = ler_carteira()
         txt = f"📋 **Vigiando {len(lista)} Ativos:**\n\n" + "\n".join([f"`{x}`" for x in lista])
@@ -230,11 +212,6 @@ def add_manual(m):
         bot.reply_to(m, f"Adicionar {novo}: {res}")
     except: bot.reply_to(m, "Use: /add ATIVO")
 
-@bot.message_handler(commands=['del'])
-def del_manual(m):
-    # Lógica simplificada de remover (apenas visual aqui, ideal implementar func completa se precisar)
-    bot.reply_to(m, "Para remover, edite a planilha manualmente por enquanto para evitar erros.")
-
 # ==============================================================================
 # 6. LOOP PRINCIPAL (CORE)
 # ==============================================================================
@@ -244,13 +221,12 @@ def loop_monitoramento():
             print(f"--- Ciclo {datetime.now().strftime('%H:%M')} ---")
             carteira = ler_carteira()
             
-            # Limpa cache do Yahoo para não dar erro de memória
             cache = Path.home() / ".cache" / "py-yfinance"
             if cache.exists(): shutil.rmtree(cache)
 
             for ativo in carteira:
                 try:
-                    # Lógica Híbrida: Binance (Real-Time) ou Yahoo (Delay)
+                    # Lógica Híbrida: Binance vs Yahoo
                     if "USD" in ativo:
                         df = pegar_dados_binance(ativo)
                     else:
@@ -258,13 +234,11 @@ def loop_monitoramento():
 
                     if df is None or len(df) < 25: continue
                     
-                    # Indicadores
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     
-                    # Cruzamento
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
                         preco = df['Close'].iloc[-1]
                         fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
@@ -272,7 +246,7 @@ def loop_monitoramento():
                         markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
                         bot.send_message(CHAT_ID, f"🟢 **OPORTUNIDADE**\n\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento SMA 9x21 (15m)", reply_markup=markup, parse_mode="Markdown")
                     
-                    time.sleep(1) # Respeito às APIs
+                    time.sleep(1)
                 except Exception as e:
                     print(f"Erro {ativo}: {e}")
 
@@ -281,10 +255,9 @@ def loop_monitoramento():
             print(f"Erro Fatal: {e}")
             time.sleep(60)
 
-# Servidor Web (Para o Render não desligar)
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô Quant Online 🚀"
+def home(): return "Robô Quant Atualizado 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
