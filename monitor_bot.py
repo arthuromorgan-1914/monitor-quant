@@ -14,8 +14,8 @@ from pathlib import Path
 import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
-import requests
 import schedule
+import google.generativeai as genai  # <--- A Biblioteca Oficial!
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -24,8 +24,10 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# Chave do Gemini
+# Configuração da IA (Jeito Profissional)
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -114,23 +116,19 @@ def registrar_trade(ativo, preco, tipo="Compra"):
         except: return False
     return False
 
-# NOVA FUNÇÃO: Verifica o último registro na planilha para não repetir
 def verificar_ultimo_status(ativo):
     sh = conectar_google()
     if sh:
         try:
-            # Pega todas as linhas da aba de trades (Sheet1)
             dados = sh.sheet1.get_all_values()
-            # Inverte a lista para procurar do mais recente para o mais antigo
             for linha in reversed(dados):
-                # Coluna B (índice 1) é o Ativo, Coluna C (índice 2) é o Tipo (Compra/Venda)
                 if len(linha) > 2 and linha[1].strip().upper() == ativo.strip().upper():
-                    return linha[2].strip() # Retorna "Compra" ou "Venda"
+                    return linha[2].strip()
         except: return None
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER)
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - USANDO BIBLIOTECA OFICIAL
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -153,7 +151,7 @@ def executar_hunter():
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             time.sleep(2)
             
-    # 2. Notícias
+    # 2. Notícias e IA (Via Biblioteca Oficial)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -172,34 +170,21 @@ def executar_hunter():
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key={GEMINI_KEY}"
-                
+                # AQUI É A MÁGICA NOVA:
+                model = genai.GenerativeModel('gemini-1.5-flash') # Modelo oficial rápido
                 prompt = (
-                    f"Analise estas manchetes: {manchetes}. "
+                    f"Analise estas manchetes financeiras: {manchetes}. "
                     "Responda EXATAMENTE neste formato de 3 linhas (use emojis):\n"
                     "Sentimento: (Resumo curto do humor do mercado)\n"
                     "Destaque: (A notícia mais relevante resumida)\n"
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                payload = {"contents": [{"parts": [{"text": prompt}]}]}
+                response = model.generate_content(prompt)
+                sentimento = response.text
                 
-                resp = requests.post(url_google, json=payload, timeout=8)
-                
-                if resp.status_code == 200:
-                    try:
-                        dados = resp.json()
-                        sentimento = dados['candidates'][0]['content']['parts'][0]['text']
-                    except:
-                        sentimento = "Erro ao ler JSON da IA."
-                elif resp.status_code == 429:
-                    sentimento = "⚠️ Cota da IA excedida (Tente mais tarde)."
-                else:
-                    sentimento = f"Erro Google ({resp.status_code})"
-        except requests.exceptions.Timeout:
-            sentimento = "⚠️ Timeout (Google demorou)."
         except Exception as e:
-            sentimento = f"Erro Técnico: {str(e)}"
+            sentimento = f"Erro IA: {str(e)}"
 
     return relatorio, sentimento, novos
 
@@ -276,7 +261,7 @@ def add_manual(m):
     except: bot.reply_to(m, "Use: /add ATIVO")
 
 # ==============================================================================
-# 7. LOOP MONITOR (COM FILTRO DE REPETIÇÃO)
+# 7. LOOP MONITOR
 # ==============================================================================
 def loop_monitoramento():
     while True:
@@ -301,28 +286,21 @@ def loop_monitoramento():
                     
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
-
-                    # Consulta o último status na planilha para evitar repetição
+                    
                     ultimo_status = verificar_ultimo_status(ativo)
 
-                    # SINAL DE COMPRA
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
                         if rsi < 70:
-                            if ultimo_status != "Compra": # Só avisa se o último NÃO for Compra
+                            if ultimo_status != "Compra":
                                 markup = InlineKeyboardMarkup()
                                 markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
                                 bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
-                            else:
-                                print(f"Silenciado {ativo}: Já está comprado.")
 
-                    # SINAL DE VENDA
                     elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
-                        if ultimo_status != "Venda": # Só avisa se o último NÃO for Venda
+                        if ultimo_status != "Venda":
                             markup = InlineKeyboardMarkup()
                             markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
                             bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
-                        else:
-                            print(f"Silenciado {ativo}: Já está vendido.")
                     
                     time.sleep(1)
                 except: pass
@@ -331,7 +309,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô Quant Inteligente 🧠"
+def home(): return "Robô V12 (Com IA Oficial) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
