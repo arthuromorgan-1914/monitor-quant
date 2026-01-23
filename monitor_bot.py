@@ -337,4 +337,6 @@ def home(): return "Robô V18 (Bala de Prata) 🚀"
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
     threading.Thread(target=thread_agendamento).start()
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000
+    # A LINHA ABAIXO FOI A QUE DEU ERRO. AQUI ESTÁ A CORREÇÃO:
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
+    bot.infinity_polling()
