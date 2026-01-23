@@ -15,7 +15,7 @@ import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
 import schedule
-import requests  # <--- O Segredo: Conexão direta sem burocracia
+import requests
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -68,7 +68,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS (COM MEMÓRIA)
+# 3. FUNÇÕES DO SHEETS
 # ==============================================================================
 def conectar_google():
     try:
@@ -121,7 +121,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (VIA REST API - BLINDADA)
+# 4. FUNÇÃO DO CAÇADOR (COM TIMEOUT E REST)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -141,10 +141,9 @@ def executar_hunter():
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
             time.sleep(1) 
         except Exception as e:
-            relatorio.append(f"Erro {alvo['symbol']}: {e}")
-            time.sleep(1)
+            relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             
-    # 2. Notícias e IA (Conexão Direta HTTP)
+    # 2. Notícias e IA
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -171,17 +170,12 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # --- A MÁGICA REST (Sem Biblioteca) ---
                 url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
                 headers = {'Content-Type': 'application/json'}
-                data = {
-                    "contents": [{
-                        "parts": [{"text": prompt}]
-                    }]
-                }
+                data = {"contents": [{"parts": [{"text": prompt}]}]}
                 
-                # Envia o POST direto pro Google
-                response = requests.post(url_google, headers=headers, json=data)
+                # TIMEOUT de 30 segundos pra não travar
+                response = requests.post(url_google, headers=headers, json=data, timeout=30)
                 
                 if response.status_code == 200:
                     try:
@@ -197,17 +191,25 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. AUTOMAÇÃO DE HORÁRIOS
+# 5. TAREFA EM SEGUNDO PLANO (ANTI-TRAVAMENTO)
 # ==============================================================================
-def enviar_relatorio_agendado():
+def tarefa_hunter_background(chat_id):
     try:
-        bot.send_message(CHAT_ID, "⏰ **Relatório Automático**\nIniciando análise...")
         achados, humor, n = executar_hunter()
         txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
         txt += f"\n\n🔢 Novos: {n}"
-        bot.send_message(CHAT_ID, txt, parse_mode="Markdown", disable_web_page_preview=True)
-        print(f"Relatório enviado às {datetime.now()}")
+        bot.send_message(chat_id, txt, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Erro ao gerar relatório: {e}")
+
+# ==============================================================================
+# 6. AUTOMAÇÃO E BOT
+# ==============================================================================
+def enviar_relatorio_agendado():
+    try:
+        bot.send_message(CHAT_ID, "⏰ **Relatório Automático**\nIniciando análise...")
+        tarefa_hunter_background(CHAT_ID) # Usa a mesma lógica background
     except Exception as e:
         print(f"Erro no agendamento: {e}")
 
@@ -218,15 +220,10 @@ def thread_agendamento():
     schedule.every().day.at("16:00").do(enviar_relatorio_agendado)
     schedule.every().day.at("18:30").do(enviar_relatorio_agendado)
     schedule.every().day.at("21:00").do(enviar_relatorio_agendado)
-    
-    print("📅 Agendador iniciado (TZ: SP)")
     while True:
         schedule.run_pending()
         time.sleep(60)
 
-# ==============================================================================
-# 6. BOT TELEGRAM
-# ==============================================================================
 @bot.message_handler(commands=['start', 'menu', 'status'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
@@ -248,13 +245,13 @@ def callback_geral(call):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
         
         elif call.data == "CMD_HUNTER":
-            bot.answer_callback_query(call.id, "Buscando... (Isso leva uns 30s)")
-            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado com Calma...**")
-            achados, humor, n = executar_hunter()
-            txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
-            txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
-            txt += f"\n\n🔢 Novos: {n}"
-            bot.send_message(CHAT_ID, txt, parse_mode="Markdown", disable_web_page_preview=True)
+            # Responde rápido para o Telegram não achar que travou
+            bot.answer_callback_query(call.id, "Iniciando caçada...")
+            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para a caça...**\n(Aguarde, te aviso quando voltar!)")
+            
+            # Lança a tarefa em uma Thread separada (MÁGICA ANTI-FREEZE)
+            t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
+            t.start()
             
         elif call.data == "CMD_LISTA":
             lista = ler_carteira()
@@ -268,9 +265,6 @@ def add_manual(m):
     try: bot.reply_to(m, f"Resultado: {adicionar_ativo(m.text.split()[1].upper())}")
     except: bot.reply_to(m, "Use: /add ATIVO")
 
-# ==============================================================================
-# 7. LOOP MONITOR
-# ==============================================================================
 def loop_monitoramento():
     while True:
         try:
@@ -291,25 +285,20 @@ def loop_monitoramento():
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-                    
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
                     
-                    # --- MEMÓRIA ---
                     ultimo_status = verificar_ultimo_status(ativo)
 
-                    if (sma9 > sma21) and (sma9_prev <= sma21_prev):
-                        if rsi < 70:
-                            if ultimo_status != "Compra":
-                                markup = InlineKeyboardMarkup()
-                                markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                                bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                    if (sma9 > sma21) and (sma9_prev <= sma21_prev) and (rsi < 70) and (ultimo_status != "Compra"):
+                        markup = InlineKeyboardMarkup()
+                        markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
+                        bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
 
-                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
-                        if ultimo_status != "Venda":
-                            markup = InlineKeyboardMarkup()
-                            markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
-                            bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
+                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev) and (ultimo_status != "Venda"):
+                        markup = InlineKeyboardMarkup()
+                        markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
+                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
                     
                     time.sleep(1)
                 except: pass
@@ -318,7 +307,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V13 (REST Direto) 🚀"
+def home(): return "Robô V14 (Anti-Freeze) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
