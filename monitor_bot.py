@@ -15,7 +15,7 @@ import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
 import schedule
-import google.generativeai as genai  # <--- A Biblioteca Oficial!
+import google.generativeai as genai  # Biblioteca Oficial
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -24,14 +24,14 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# Configuração da IA (Jeito Profissional)
+# Configuração da IA (Com chave do ambiente)
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 
 bot = telebot.TeleBot(TOKEN)
 
-# LISTA DE CAÇA
+# LISTA DE CAÇA (HUNTER)
 ALVOS_CAÇADOR = [
     # BRASIL (B3)
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
@@ -39,13 +39,10 @@ ALVOS_CAÇADOR = [
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
-    # CRIPTO (Binance - USDT)
+    # CRIPTO (Binance)
     {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
     {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
     {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
-    {"symbol": "DOGEUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "DOGE-USD"},
-    {"symbol": "SHIBUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SHIB-USD"},
-    {"symbol": "XRPUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "XRP-USD"},
     # EUA
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
@@ -128,7 +125,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - USANDO BIBLIOTECA OFICIAL
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - BLINDADA 🛡️
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -151,7 +148,7 @@ def executar_hunter():
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             time.sleep(2)
             
-    # 2. Notícias e IA (Via Biblioteca Oficial)
+    # 2. Notícias e IA (Estratégia Anti-Erro)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -170,8 +167,6 @@ def executar_hunter():
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                # AQUI É A MÁGICA NOVA:
-                model = genai.GenerativeModel('gemini-1.5-flash') # Modelo oficial rápido
                 prompt = (
                     f"Analise estas manchetes financeiras: {manchetes}. "
                     "Responda EXATAMENTE neste formato de 3 linhas (use emojis):\n"
@@ -180,16 +175,31 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                response = model.generate_content(prompt)
-                sentimento = response.text
-                
+                # --- LÓGICA DE TENTATIVA DUPLA ---
+                # Tenta o modelo Flash (Novo/Rápido)
+                try:
+                    # Tenta acessar pelo nome da versão estável
+                    model = genai.GenerativeModel('models/gemini-1.5-flash-001')
+                    response = model.generate_content(prompt)
+                    sentimento = response.text
+                except Exception as e_flash:
+                    print(f"⚠️ Flash falhou ({e_flash}). Tentando Pro...")
+                    
+                    # Se falhar, tenta o modelo Pro (O "Fusca" que nunca falha)
+                    try:
+                        model_pro = genai.GenerativeModel('gemini-pro')
+                        response = model_pro.generate_content(prompt)
+                        sentimento = response.text
+                    except Exception as e_pro:
+                        sentimento = f"Erro Total IA: {str(e_pro)}"
+
         except Exception as e:
-            sentimento = f"Erro IA: {str(e)}"
+            sentimento = f"Erro Geral IA: {str(e)}"
 
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. AUTOMAÇÃO
+# 5. AUTOMAÇÃO DE HORÁRIOS
 # ==============================================================================
 def enviar_relatorio_agendado():
     try:
@@ -287,6 +297,7 @@ def loop_monitoramento():
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
                     
+                    # --- MEMÓRIA ---
                     ultimo_status = verificar_ultimo_status(ativo)
 
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
@@ -309,7 +320,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V12 (Com IA Oficial) 🚀"
+def home(): return "Robô V12.1 (Blindado) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
