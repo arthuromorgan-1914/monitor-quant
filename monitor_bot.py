@@ -121,7 +121,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (IA REST & SEM TRAVAMENTO)
+# 4. FUNÇÃO DO CAÇADOR (FORÇA BRUTA MULTI-MODELO)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -143,7 +143,7 @@ def executar_hunter():
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             
-    # 2. Notícias e IA
+    # 2. Notícias e IA (TENTATIVA TRIPLA)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -170,20 +170,39 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # Conexão direta (REST) para evitar erro de biblioteca
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-                headers = {'Content-Type': 'application/json'}
-                data = {"contents": [{"parts": [{"text": prompt}]}]}
+                # LISTA DE MODELOS PARA TENTAR (SE UM FALHAR, TENTA O PRÓXIMO)
+                modelos = [
+                    "gemini-1.5-flash-001",  # Oficial Estável
+                    "gemini-1.5-flash",      # Atalho Curto
+                    "gemini-pro"             # Legado (Plano C)
+                ]
                 
-                response = requests.post(url_google, headers=headers, json=data, timeout=30)
-                
-                if response.status_code == 200:
+                sucesso = False
+                for modelo in modelos:
+                    if sucesso: break
                     try:
-                        sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
-                    except:
-                        sentimento = "Erro ao ler JSON do Google."
-                else:
-                    sentimento = f"Erro API Google: {response.status_code} - {response.text}"
+                        url_google = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
+                        headers = {'Content-Type': 'application/json'}
+                        data = {"contents": [{"parts": [{"text": prompt}]}]}
+                        
+                        response = requests.post(url_google, headers=headers, json=data, timeout=30)
+                        
+                        if response.status_code == 200:
+                            try:
+                                sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
+                                sucesso = True # Para o loop
+                            except:
+                                continue # Tenta o proximo se o JSON vier quebrado
+                        else:
+                            # Se der erro 404 ou 500, continua o loop para o proximo modelo
+                            sentimento = f"Erro no modelo {modelo}: {response.status_code}"
+                            continue
+                            
+                    except Exception as e:
+                        continue # Tenta o proximo modelo
+
+                if not sucesso:
+                    sentimento = f"Falha total na IA. Último erro: {sentimento}"
 
         except Exception as e:
             sentimento = f"Erro Geral IA: {str(e)}"
@@ -191,7 +210,7 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. TAREFA EM SEGUNDO PLANO (SAFE MODE - SEM MARKDOWN)
+# 5. TAREFA EM SEGUNDO PLANO (SAFE MODE)
 # ==============================================================================
 def tarefa_hunter_background(chat_id):
     try:
@@ -202,7 +221,6 @@ def tarefa_hunter_background(chat_id):
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
         txt += f"\n\n🔢 Novos: {n}"
         
-        # parse_mode=None para aceitar qualquer caractere da IA
         bot.send_message(chat_id, txt, parse_mode=None, disable_web_page_preview=True)
         
     except Exception as e:
@@ -310,7 +328,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V15 (Blindado 404 e 400) 🚀"
+def home(): return "Robô V16 (Força Bruta IA) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
