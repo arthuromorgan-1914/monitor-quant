@@ -172,7 +172,7 @@ def executar_hunter():
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key={GEMINI_KEY}"
                 
                 prompt = (
                     f"Analise estas manchetes: {manchetes}. "
