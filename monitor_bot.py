@@ -72,7 +72,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS
+# 3. FUNÇÕES DO SHEETS (Agora aceita TIPO: Compra ou Venda)
 # ==============================================================================
 def conectar_google():
     try:
@@ -103,17 +103,19 @@ def adicionar_ativo(novo_ativo):
         except: return "Erro"
     return "Erro Conexão"
 
-def registrar_trade(ativo, preco):
+def registrar_trade(ativo, preco, tipo="Compra"):
     sh = conectar_google()
     if sh:
         try:
-            sh.sheet1.append_row([datetime.now().strftime('%d/%m %H:%M'), ativo, "Compra", preco, "", "", "Aberta"])
+            # Coluna G agora registra se está "Aberta" ou "Encerrada" dependendo do tipo
+            status = "Aberta" if tipo == "Compra" else "Encerrada"
+            sh.sheet1.append_row([datetime.now().strftime('%d/%m %H:%M'), ativo, tipo, preco, "", "", status])
             return True
         except: return False
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - MODELO 2.0 + FREIO ABS
+# 4. FUNÇÃO DO CAÇADOR (HUNTER)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -131,13 +133,10 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            
-            # --- MUDANÇA CRÍTICA: PAUSA PARA NÃO TOMAR BLOCK (429) ---
-            time.sleep(2) 
-            
+            time.sleep(2) # Anti-bloqueio TradingView
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
-            time.sleep(2) # Pausa mesmo se der erro
+            time.sleep(2)
             
     # 2. Notícias
     sentimento = "Iniciando..."
@@ -157,10 +156,7 @@ def executar_hunter():
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
-                # --- MUDANÇA CRÍTICA: USANDO O MODELO QUE A SUA CONTA PERMITE ---
-                # O erro anterior nos disse para usar: gemini-2.0-flash-exp
                 url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
-                
                 prompt = f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}"
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 
@@ -176,7 +172,6 @@ def executar_hunter():
                     sentimento = "⚠️ Cota da IA excedida (Aguarde)."
                 else:
                     sentimento = f"Erro Google ({resp.status_code})"
-                    
         except requests.exceptions.Timeout:
             sentimento = "⚠️ Timeout (Google demorou)."
         except Exception as e:
@@ -185,7 +180,7 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. BOT TELEGRAM
+# 5. BOT TELEGRAM (COM SUPORTE A VENDA)
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu', 'status'])
 def menu_principal(message):
@@ -197,14 +192,21 @@ def menu_principal(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_geral(call):
     try:
+        # Callback de COMPRA
         if call.data.startswith("COMPRA|"):
             _, ativo, preco = call.data.split("|")
-            if registrar_trade(ativo, preco):
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **REGISTRADO!**")
+            if registrar_trade(ativo, preco, "Compra"):
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **COMPRA REGISTRADA!**")
+        
+        # Callback de VENDA (NOVO)
+        elif call.data.startswith("VENDA|"):
+            _, ativo, preco = call.data.split("|")
+            if registrar_trade(ativo, preco, "Venda"):
+                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
         
         elif call.data == "CMD_HUNTER":
             bot.answer_callback_query(call.id, "Buscando... (Isso leva uns 30s)")
-            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado com Calma...**\n(Aguarde, estou consultando ativo por ativo para evitar bloqueios)")
+            bot.send_message(CHAT_ID, "🕵️ **Analisando Mercado com Calma...**")
             achados, humor, n = executar_hunter()
             txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
             txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
@@ -224,7 +226,7 @@ def add_manual(m):
     except: bot.reply_to(m, "Use: /add ATIVO")
 
 # ==============================================================================
-# 6. LOOP MONITOR
+# 6. LOOP MONITOR (COM SINAIS DE VENDA)
 # ==============================================================================
 def loop_monitoramento():
     while True:
@@ -246,12 +248,21 @@ def loop_monitoramento():
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     
+                    preco = df['Close'].iloc[-1]
+                    fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
+
+                    # SINAL DE COMPRA (Golden Cross)
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
-                        preco = df['Close'].iloc[-1]
-                        fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
                         markup = InlineKeyboardMarkup()
                         markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🟢 **OPORTUNIDADE**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento 9x21", reply_markup=markup, parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                    
+                    # SINAL DE VENDA (Death Cross) - NOVO!
+                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
+                        markup = InlineKeyboardMarkup()
+                        markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
+                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento: 9 < 21\n(Proteja seu lucro!)", reply_markup=markup, parse_mode="Markdown")
+                    
                     time.sleep(1)
                 except: pass
             time.sleep(900)
@@ -259,7 +270,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô Quant V6 🚀"
+def home(): return "Robô V7 (Compra/Venda) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
