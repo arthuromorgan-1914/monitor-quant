@@ -72,7 +72,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS (Agora aceita TIPO: Compra ou Venda)
+# 3. FUNÇÕES DO SHEETS
 # ==============================================================================
 def conectar_google():
     try:
@@ -107,7 +107,6 @@ def registrar_trade(ativo, preco, tipo="Compra"):
     sh = conectar_google()
     if sh:
         try:
-            # Coluna G agora registra se está "Aberta" ou "Encerrada" dependendo do tipo
             status = "Aberta" if tipo == "Compra" else "Encerrada"
             sh.sheet1.append_row([datetime.now().strftime('%d/%m %H:%M'), ativo, tipo, preco, "", "", status])
             return True
@@ -133,7 +132,7 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            time.sleep(2) # Anti-bloqueio TradingView
+            time.sleep(2)
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             time.sleep(2)
@@ -180,7 +179,7 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. BOT TELEGRAM (COM SUPORTE A VENDA)
+# 5. BOT TELEGRAM
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu', 'status'])
 def menu_principal(message):
@@ -192,13 +191,11 @@ def menu_principal(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_geral(call):
     try:
-        # Callback de COMPRA
         if call.data.startswith("COMPRA|"):
             _, ativo, preco = call.data.split("|")
             if registrar_trade(ativo, preco, "Compra"):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **COMPRA REGISTRADA!**")
         
-        # Callback de VENDA (NOVO)
         elif call.data.startswith("VENDA|"):
             _, ativo, preco = call.data.split("|")
             if registrar_trade(ativo, preco, "Venda"):
@@ -226,7 +223,7 @@ def add_manual(m):
     except: bot.reply_to(m, "Use: /add ATIVO")
 
 # ==============================================================================
-# 6. LOOP MONITOR (COM SINAIS DE VENDA)
+# 6. LOOP MONITOR (COM RSI)
 # ==============================================================================
 def loop_monitoramento():
     while True:
@@ -241,27 +238,35 @@ def loop_monitoramento():
                     if "USD" in ativo: df = pegar_dados_binance(ativo)
                     else: df = pegar_dados_yahoo(ativo)
 
-                    if df is None or len(df) < 25: continue
+                    if df is None or len(df) < 50: continue # Precisa de mais dados pro RSI
                     
+                    # CÁLCULOS TÉCNICOS
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     
+                    # NOVO: CÁLCULO RSI (14 períodos)
+                    rsi = ta.rsi(df['Close'], length=14).iloc[-1]
+                    
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
 
-                    # SINAL DE COMPRA (Golden Cross)
+                    # SINAL DE COMPRA (Golden Cross + Filtro RSI < 70)
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
-                        markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
-                    
-                    # SINAL DE VENDA (Death Cross) - NOVO!
+                        if rsi < 70:
+                            markup = InlineKeyboardMarkup()
+                            markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
+                            bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f} (Bom)\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                        else:
+                            # Opcional: Avisar que ignorou compra por causa do RSI (ou ficar quieto)
+                            print(f"Sinal ignorado {ativo}: RSI muito alto ({rsi:.0f})")
+
+                    # SINAL DE VENDA (Death Cross) - O RSI não bloqueia venda!
                     elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
                         markup = InlineKeyboardMarkup()
                         markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nCruzamento: 9 < 21\n(Proteja seu lucro!)", reply_markup=markup, parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
                     
                     time.sleep(1)
                 except: pass
@@ -270,7 +275,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V7 (Compra/Venda) 🚀"
+def home(): return "Robô V8 (RSI Filter) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
