@@ -15,7 +15,7 @@ import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
 import schedule
-import requests
+import requests  # Importante para a conexão direta com o Google
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -46,7 +46,7 @@ ALVOS_CAÇADOR = [
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES DE DADOS
+# 2. FUNÇÕES DE DADOS (MERCADO)
 # ==============================================================================
 def pegar_dados_binance(symbol):
     symbol_binance = symbol.replace("-", "/").replace("USD", "USDT")
@@ -68,7 +68,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS
+# 3. FUNÇÕES DO SHEETS (REGISTRO)
 # ==============================================================================
 def conectar_google():
     try:
@@ -121,13 +121,13 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (FORÇA BRUTA MULTI-MODELO)
+# 4. FUNÇÃO DO CAÇADOR (IA BLINDADA V17)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
     novos = 0
     
-    # 1. Scanner Técnico
+    # --- Parte 1: Scanner Técnico (TradingView) ---
     for alvo in ALVOS_CAÇADOR:
         try:
             handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
@@ -143,7 +143,7 @@ def executar_hunter():
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             
-    # 2. Notícias e IA (TENTATIVA TRIPLA)
+    # --- Parte 2: Notícias e IA (Multi-Modelo) ---
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -170,17 +170,20 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # LISTA DE MODELOS PARA TENTAR (SE UM FALHAR, TENTA O PRÓXIMO)
+                # LISTA DE TENTATIVAS (Se um falhar, tenta o próximo)
                 modelos = [
-                    "gemini-1.5-flash-001",  # Oficial Estável
-                    "gemini-1.5-flash",      # Atalho Curto
-                    "gemini-pro"             # Legado (Plano C)
+                    "gemini-1.5-flash",      # Opção 1: Rápido e Novo
+                    "gemini-1.5-flash-001",  # Opção 2: Versão Estável
+                    "gemini-pro"             # Opção 3: Clássico (Fallback)
                 ]
                 
                 sucesso = False
+                ultimo_erro = ""
+                
                 for modelo in modelos:
                     if sucesso: break
                     try:
+                        # URL direta da API do Google (REST)
                         url_google = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
                         headers = {'Content-Type': 'application/json'}
                         data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -190,19 +193,20 @@ def executar_hunter():
                         if response.status_code == 200:
                             try:
                                 sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
-                                sucesso = True # Para o loop
+                                sucesso = True
                             except:
-                                continue # Tenta o proximo se o JSON vier quebrado
+                                ultimo_erro = "JSON inválido"
+                                continue
                         else:
-                            # Se der erro 404 ou 500, continua o loop para o proximo modelo
-                            sentimento = f"Erro no modelo {modelo}: {response.status_code}"
+                            ultimo_erro = f"Erro {response.status_code} no modelo {modelo}"
                             continue
                             
                     except Exception as e:
-                        continue # Tenta o proximo modelo
+                        ultimo_erro = str(e)
+                        continue
 
                 if not sucesso:
-                    sentimento = f"Falha total na IA. Último erro: {sentimento}"
+                    sentimento = f"Falha na IA. Motivo: {ultimo_erro}"
 
         except Exception as e:
             sentimento = f"Erro Geral IA: {str(e)}"
@@ -210,17 +214,18 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. TAREFA EM SEGUNDO PLANO (SAFE MODE)
+# 5. TAREFA EM SEGUNDO PLANO (SAFE MODE - SEM TRAVAMENTO)
 # ==============================================================================
 def tarefa_hunter_background(chat_id):
     try:
         achados, humor, n = executar_hunter()
         
-        # Modo Texto Puro (Evita erro 400 do Telegram)
+        # Monta o texto
         txt = f"📋 RELATÓRIO HUNTER\n\n🌡️ Clima: {humor}\n\n"
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
         txt += f"\n\n🔢 Novos: {n}"
         
+        # Envia como TEXTO PURO (parse_mode=None) para evitar erro 400 do Telegram
         bot.send_message(chat_id, txt, parse_mode=None, disable_web_page_preview=True)
         
     except Exception as e:
@@ -243,6 +248,8 @@ def thread_agendamento():
     schedule.every().day.at("16:00").do(enviar_relatorio_agendado)
     schedule.every().day.at("18:30").do(enviar_relatorio_agendado)
     schedule.every().day.at("21:00").do(enviar_relatorio_agendado)
+    
+    print("📅 Agendador iniciado...")
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -270,7 +277,7 @@ def callback_geral(call):
         elif call.data == "CMD_HUNTER":
             bot.answer_callback_query(call.id, "Iniciando caçada...")
             bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para a caça...**\n(Aguarde, te aviso quando voltar!)")
-            # Dispara em Thread separada
+            # Dispara em Thread separada para não travar o bot
             t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
             t.start()
             
@@ -286,6 +293,7 @@ def add_manual(m):
     try: bot.reply_to(m, f"Resultado: {adicionar_ativo(m.text.split()[1].upper())}")
     except: bot.reply_to(m, "Use: /add ATIVO")
 
+# Loop principal de monitoramento (Médias Móveis)
 def loop_monitoramento():
     while True:
         try:
@@ -328,7 +336,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V16 (Força Bruta IA) 🚀"
+def home(): return "Robô V17 (Final) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
