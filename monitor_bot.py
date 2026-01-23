@@ -73,7 +73,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS
+# 3. FUNÇÕES DO SHEETS (COM MEMÓRIA)
 # ==============================================================================
 def conectar_google():
     try:
@@ -114,8 +114,23 @@ def registrar_trade(ativo, preco, tipo="Compra"):
         except: return False
     return False
 
+# NOVA FUNÇÃO: Verifica o último registro na planilha para não repetir
+def verificar_ultimo_status(ativo):
+    sh = conectar_google()
+    if sh:
+        try:
+            # Pega todas as linhas da aba de trades (Sheet1)
+            dados = sh.sheet1.get_all_values()
+            # Inverte a lista para procurar do mais recente para o mais antigo
+            for linha in reversed(dados):
+                # Coluna B (índice 1) é o Ativo, Coluna C (índice 2) é o Tipo (Compra/Venda)
+                if len(linha) > 2 and linha[1].strip().upper() == ativo.strip().upper():
+                    return linha[2].strip() # Retorna "Compra" ou "Venda"
+        except: return None
+    return None
+
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - COM NOTÍCIA EXPLICADA + LINK
+# 4. FUNÇÃO DO CAÇADOR (HUNTER)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -133,12 +148,12 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            time.sleep(2) # Pausa Anti-Bloqueio
+            time.sleep(2) 
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             time.sleep(2)
             
-    # 2. Notícias e Sentimento Explicado
+    # 2. Notícias
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -150,7 +165,6 @@ def executar_hunter():
                 for url in feeds:
                     d = feedparser.parse(url)
                     if d.entries:
-                        # Pega Titulo + Link das 3 primeiras de cada feed
                         for entry in d.entries[:3]:
                             manchetes.append(f"Título: {entry.title} | Link: {entry.link}")
             except: pass
@@ -160,9 +174,8 @@ def executar_hunter():
             else:
                 url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
                 
-                # PROMPT NOVO: Pede explicação e link
                 prompt = (
-                    f"Analise estas manchetes financeiras: {manchetes}. "
+                    f"Analise estas manchetes: {manchetes}. "
                     "Responda EXATAMENTE neste formato de 3 linhas (use emojis):\n"
                     "Sentimento: (Resumo curto do humor do mercado)\n"
                     "Destaque: (A notícia mais relevante resumida)\n"
@@ -191,7 +204,7 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. AUTOMAÇÃO (AGENDAMENTO)
+# 5. AUTOMAÇÃO
 # ==============================================================================
 def enviar_relatorio_agendado():
     try:
@@ -200,13 +213,12 @@ def enviar_relatorio_agendado():
         txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
         txt += f"\n\n🔢 Novos: {n}"
-        bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+        bot.send_message(CHAT_ID, txt, parse_mode="Markdown", disable_web_page_preview=True)
         print(f"Relatório enviado às {datetime.now()}")
     except Exception as e:
         print(f"Erro no agendamento: {e}")
 
 def thread_agendamento():
-    # Seus 6 horários estratégicos
     schedule.every().day.at("07:00").do(enviar_relatorio_agendado)
     schedule.every().day.at("10:15").do(enviar_relatorio_agendado)
     schedule.every().day.at("13:00").do(enviar_relatorio_agendado)
@@ -214,8 +226,7 @@ def thread_agendamento():
     schedule.every().day.at("18:30").do(enviar_relatorio_agendado)
     schedule.every().day.at("21:00").do(enviar_relatorio_agendado)
     
-    print("📅 Agendador iniciado (07h, 10h15, 13h, 16h, 18h30, 21h)")
-    
+    print("📅 Agendador iniciado (TZ: SP)")
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -265,7 +276,7 @@ def add_manual(m):
     except: bot.reply_to(m, "Use: /add ATIVO")
 
 # ==============================================================================
-# 7. LOOP MONITOR (MÉDIAS + RSI)
+# 7. LOOP MONITOR (COM FILTRO DE REPETIÇÃO)
 # ==============================================================================
 def loop_monitoramento():
     while True:
@@ -282,7 +293,6 @@ def loop_monitoramento():
 
                     if df is None or len(df) < 50: continue
                     
-                    # CÁLCULOS
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
@@ -292,18 +302,27 @@ def loop_monitoramento():
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
 
-                    # SINAL DE COMPRA (Médias + RSI < 70)
+                    # Consulta o último status na planilha para evitar repetição
+                    ultimo_status = verificar_ultimo_status(ativo)
+
+                    # SINAL DE COMPRA
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
                         if rsi < 70:
-                            markup = InlineKeyboardMarkup()
-                            markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                            bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                            if ultimo_status != "Compra": # Só avisa se o último NÃO for Compra
+                                markup = InlineKeyboardMarkup()
+                                markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
+                                bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                            else:
+                                print(f"Silenciado {ativo}: Já está comprado.")
 
-                    # SINAL DE VENDA (Só Médias, para proteger rápido)
+                    # SINAL DE VENDA
                     elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
-                        markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
+                        if ultimo_status != "Venda": # Só avisa se o último NÃO for Venda
+                            markup = InlineKeyboardMarkup()
+                            markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
+                            bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
+                        else:
+                            print(f"Silenciado {ativo}: Já está vendido.")
                     
                     time.sleep(1)
                 except: pass
@@ -312,10 +331,10 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V10 (Final) 🚀"
+def home(): return "Robô Quant Inteligente 🧠"
 
 if __name__ == "__main__":
-    threading.Thread(target=loop_monitoramento).start() # Monitor 15min
-    threading.Thread(target=thread_agendamento).start() # Agendador 6x dia
+    threading.Thread(target=loop_monitoramento).start()
+    threading.Thread(target=thread_agendamento).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
     bot.infinity_polling()
