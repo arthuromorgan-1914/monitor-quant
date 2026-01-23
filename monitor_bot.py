@@ -121,7 +121,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (COM TIMEOUT E REST)
+# 4. FUNÇÃO DO CAÇADOR (IA REST & SEM TRAVAMENTO)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -170,11 +170,11 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
+                # Conexão direta (REST) para evitar erro de biblioteca
                 url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
                 headers = {'Content-Type': 'application/json'}
                 data = {"contents": [{"parts": [{"text": prompt}]}]}
                 
-                # TIMEOUT de 30 segundos pra não travar
                 response = requests.post(url_google, headers=headers, json=data, timeout=30)
                 
                 if response.status_code == 200:
@@ -191,15 +191,20 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. TAREFA EM SEGUNDO PLANO (ANTI-TRAVAMENTO)
+# 5. TAREFA EM SEGUNDO PLANO (SAFE MODE - SEM MARKDOWN)
 # ==============================================================================
 def tarefa_hunter_background(chat_id):
     try:
         achados, humor, n = executar_hunter()
-        txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
+        
+        # Modo Texto Puro (Evita erro 400 do Telegram)
+        txt = f"📋 RELATÓRIO HUNTER\n\n🌡️ Clima: {humor}\n\n"
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
         txt += f"\n\n🔢 Novos: {n}"
-        bot.send_message(chat_id, txt, parse_mode="Markdown", disable_web_page_preview=True)
+        
+        # parse_mode=None para aceitar qualquer caractere da IA
+        bot.send_message(chat_id, txt, parse_mode=None, disable_web_page_preview=True)
+        
     except Exception as e:
         bot.send_message(chat_id, f"⚠️ Erro ao gerar relatório: {e}")
 
@@ -209,7 +214,7 @@ def tarefa_hunter_background(chat_id):
 def enviar_relatorio_agendado():
     try:
         bot.send_message(CHAT_ID, "⏰ **Relatório Automático**\nIniciando análise...")
-        tarefa_hunter_background(CHAT_ID) # Usa a mesma lógica background
+        tarefa_hunter_background(CHAT_ID)
     except Exception as e:
         print(f"Erro no agendamento: {e}")
 
@@ -245,11 +250,9 @@ def callback_geral(call):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
         
         elif call.data == "CMD_HUNTER":
-            # Responde rápido para o Telegram não achar que travou
             bot.answer_callback_query(call.id, "Iniciando caçada...")
             bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para a caça...**\n(Aguarde, te aviso quando voltar!)")
-            
-            # Lança a tarefa em uma Thread separada (MÁGICA ANTI-FREEZE)
+            # Dispara em Thread separada
             t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
             t.start()
             
@@ -307,7 +310,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V14 (Anti-Freeze) 🚀"
+def home(): return "Robô V15 (Blindado 404 e 400) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
