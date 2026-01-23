@@ -15,6 +15,7 @@ import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
 import requests
+import schedule
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -114,7 +115,7 @@ def registrar_trade(ativo, preco, tipo="Compra"):
     return False
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER)
+# 4. FUNÇÃO DO CAÇADOR (HUNTER) - COM NOTÍCIA EXPLICADA + LINK
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -132,12 +133,12 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            time.sleep(2)
+            time.sleep(2) # Pausa Anti-Bloqueio
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
             time.sleep(2)
             
-    # 2. Notícias
+    # 2. Notícias e Sentimento Explicado
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -149,14 +150,25 @@ def executar_hunter():
                 for url in feeds:
                     d = feedparser.parse(url)
                     if d.entries:
-                        for entry in d.entries[:2]: manchetes.append(f"- {entry.title}")
+                        # Pega Titulo + Link das 3 primeiras de cada feed
+                        for entry in d.entries[:3]:
+                            manchetes.append(f"Título: {entry.title} | Link: {entry.link}")
             except: pass
             
             if not manchetes:
                 sentimento = "Aviso: Sem notícias no RSS."
             else:
                 url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
-                prompt = f"Resuma o sentimento do mercado em 1 frase curta: {manchetes}"
+                
+                # PROMPT NOVO: Pede explicação e link
+                prompt = (
+                    f"Analise estas manchetes financeiras: {manchetes}. "
+                    "Responda EXATAMENTE neste formato de 3 linhas (use emojis):\n"
+                    "Sentimento: (Resumo curto do humor do mercado)\n"
+                    "Destaque: (A notícia mais relevante resumida)\n"
+                    "Fonte: (O link da notícia destaque)"
+                )
+                
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 
                 resp = requests.post(url_google, json=payload, timeout=8)
@@ -168,7 +180,7 @@ def executar_hunter():
                     except:
                         sentimento = "Erro ao ler JSON da IA."
                 elif resp.status_code == 429:
-                    sentimento = "⚠️ Cota da IA excedida (Aguarde)."
+                    sentimento = "⚠️ Cota da IA excedida (Tente mais tarde)."
                 else:
                     sentimento = f"Erro Google ({resp.status_code})"
         except requests.exceptions.Timeout:
@@ -179,7 +191,37 @@ def executar_hunter():
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. BOT TELEGRAM
+# 5. AUTOMAÇÃO (AGENDAMENTO)
+# ==============================================================================
+def enviar_relatorio_agendado():
+    try:
+        bot.send_message(CHAT_ID, "⏰ **Relatório Automático**\nIniciando análise...")
+        achados, humor, n = executar_hunter()
+        txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
+        txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
+        txt += f"\n\n🔢 Novos: {n}"
+        bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+        print(f"Relatório enviado às {datetime.now()}")
+    except Exception as e:
+        print(f"Erro no agendamento: {e}")
+
+def thread_agendamento():
+    # Seus 6 horários estratégicos
+    schedule.every().day.at("07:00").do(enviar_relatorio_agendado)
+    schedule.every().day.at("10:15").do(enviar_relatorio_agendado)
+    schedule.every().day.at("13:00").do(enviar_relatorio_agendado)
+    schedule.every().day.at("16:00").do(enviar_relatorio_agendado)
+    schedule.every().day.at("18:30").do(enviar_relatorio_agendado)
+    schedule.every().day.at("21:00").do(enviar_relatorio_agendado)
+    
+    print("📅 Agendador iniciado (07h, 10h15, 13h, 16h, 18h30, 21h)")
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# ==============================================================================
+# 6. BOT TELEGRAM
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu', 'status'])
 def menu_principal(message):
@@ -208,7 +250,7 @@ def callback_geral(call):
             txt = f"📋 **RELATÓRIO HUNTER**\n\n🌡️ *Clima:* {humor}\n\n"
             txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
             txt += f"\n\n🔢 Novos: {n}"
-            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
+            bot.send_message(CHAT_ID, txt, parse_mode="Markdown", disable_web_page_preview=True)
             
         elif call.data == "CMD_LISTA":
             lista = ler_carteira()
@@ -223,7 +265,7 @@ def add_manual(m):
     except: bot.reply_to(m, "Use: /add ATIVO")
 
 # ==============================================================================
-# 6. LOOP MONITOR (COM RSI)
+# 7. LOOP MONITOR (MÉDIAS + RSI)
 # ==============================================================================
 def loop_monitoramento():
     while True:
@@ -238,31 +280,26 @@ def loop_monitoramento():
                     if "USD" in ativo: df = pegar_dados_binance(ativo)
                     else: df = pegar_dados_yahoo(ativo)
 
-                    if df is None or len(df) < 50: continue # Precisa de mais dados pro RSI
+                    if df is None or len(df) < 50: continue
                     
-                    # CÁLCULOS TÉCNICOS
+                    # CÁLCULOS
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
-                    
-                    # NOVO: CÁLCULO RSI (14 períodos)
                     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
                     
                     preco = df['Close'].iloc[-1]
                     fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
 
-                    # SINAL DE COMPRA (Golden Cross + Filtro RSI < 70)
+                    # SINAL DE COMPRA (Médias + RSI < 70)
                     if (sma9 > sma21) and (sma9_prev <= sma21_prev):
                         if rsi < 70:
                             markup = InlineKeyboardMarkup()
                             markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                            bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f} (Bom)\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
-                        else:
-                            # Opcional: Avisar que ignorou compra por causa do RSI (ou ficar quieto)
-                            print(f"Sinal ignorado {ativo}: RSI muito alto ({rsi:.0f})")
+                            bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
 
-                    # SINAL DE VENDA (Death Cross) - O RSI não bloqueia venda!
+                    # SINAL DE VENDA (Só Médias, para proteger rápido)
                     elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
                         markup = InlineKeyboardMarkup()
                         markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
@@ -275,9 +312,10 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V8 (RSI Filter) 🚀"
+def home(): return "Robô V10 (Final) 🚀"
 
 if __name__ == "__main__":
-    threading.Thread(target=loop_monitoramento).start()
+    threading.Thread(target=loop_monitoramento).start() # Monitor 15min
+    threading.Thread(target=thread_agendamento).start() # Agendador 6x dia
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
     bot.infinity_polling()
