@@ -15,7 +15,7 @@ import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
 import ccxt
 import schedule
-import google.generativeai as genai  # Biblioteca Oficial
+import requests  # <--- O Segredo: Conexão direta sem burocracia
 
 # ==============================================================================
 # 1. CONFIGURAÇÕES
@@ -23,11 +23,7 @@ import google.generativeai as genai  # Biblioteca Oficial
 TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
-
-# Configuração da IA (Com chave do ambiente)
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -80,7 +76,7 @@ def conectar_google():
         sh = gc.open(NOME_PLANILHA_GOOGLE)
         return sh
     except Exception as e:
-        print(f"❌ Erro Google: {e}")
+        print(f"❌ Erro Google Sheets: {e}")
         return None
 
 def ler_carteira():
@@ -125,7 +121,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (HUNTER) - BLINDADA 🛡️
+# 4. FUNÇÃO DO CAÇADOR (VIA REST API - BLINDADA)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -143,12 +139,12 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            time.sleep(2) 
+            time.sleep(1) 
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {e}")
-            time.sleep(2)
+            time.sleep(1)
             
-    # 2. Notícias e IA (Estratégia Anti-Erro)
+    # 2. Notícias e IA (Conexão Direta HTTP)
     sentimento = "Iniciando..."
     if not GEMINI_KEY:
         sentimento = "Erro: Chave GEMINI não configurada."
@@ -175,23 +171,25 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # --- LÓGICA DE TENTATIVA DUPLA ---
-                # Tenta o modelo Flash (Novo/Rápido)
-                try:
-                    # Tenta acessar pelo nome da versão estável
-                    model = genai.GenerativeModel('models/gemini-1.5-flash-001')
-                    response = model.generate_content(prompt)
-                    sentimento = response.text
-                except Exception as e_flash:
-                    print(f"⚠️ Flash falhou ({e_flash}). Tentando Pro...")
-                    
-                    # Se falhar, tenta o modelo Pro (O "Fusca" que nunca falha)
+                # --- A MÁGICA REST (Sem Biblioteca) ---
+                url_google = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+                headers = {'Content-Type': 'application/json'}
+                data = {
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+                
+                # Envia o POST direto pro Google
+                response = requests.post(url_google, headers=headers, json=data)
+                
+                if response.status_code == 200:
                     try:
-                        model_pro = genai.GenerativeModel('gemini-pro')
-                        response = model_pro.generate_content(prompt)
-                        sentimento = response.text
-                    except Exception as e_pro:
-                        sentimento = f"Erro Total IA: {str(e_pro)}"
+                        sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
+                    except:
+                        sentimento = "Erro ao ler JSON do Google."
+                else:
+                    sentimento = f"Erro API Google: {response.status_code} - {response.text}"
 
         except Exception as e:
             sentimento = f"Erro Geral IA: {str(e)}"
@@ -320,7 +318,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V12.1 (Blindado) 🚀"
+def home(): return "Robô V13 (REST Direto) 🚀"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
