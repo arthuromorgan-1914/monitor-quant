@@ -25,7 +25,7 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- COLE SUA CHAVE DENTRO DAS ASPAS ---
+# --- COLE SUA CHAVE AQUI DENTRO DAS ASPAS ---
 GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0" 
 
 bot = telebot.TeleBot(TOKEN)
@@ -49,7 +49,7 @@ ALVOS_CAÇADOR = [
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES DE DADOS
+# 2. FUNÇÕES DE DADOS (MERCADO)
 # ==============================================================================
 def pegar_dados_binance(symbol):
     symbol_binance = symbol.replace("-", "/").replace("USD", "USDT")
@@ -71,19 +71,42 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS
+# 3. FUNÇÕES DO SHEETS (MODO DEBUG LIGADO 🕵️‍♂️)
 # ==============================================================================
-def conectar_google():
+def conectar_google(verbose=False):
+    # 1. Verifica se o arquivo existe fisicamente
+    if not os.path.exists('creds.json'):
+        msg = "❌ Erro Crítico: O arquivo 'creds.json' NÃO está no Render. Verifique em 'Secret Files'."
+        if verbose: return None, msg
+        print(msg)
+        return None, msg
+
     try:
+        # 2. Tenta autenticar (Logar na conta)
         gc = gspread.service_account(filename='creds.json')
+        
+        # 3. Tenta abrir a planilha pelo nome
         sh = gc.open(NOME_PLANILHA_GOOGLE)
-        return sh
+        return sh, "Sucesso"
+
     except Exception as e:
-        print(f"❌ Erro Google Sheets: {e}")
-        return None
+        erro_str = str(e)
+        print(f"❌ ERRO GOOGLE DETALHADO: {erro_str}")
+        
+        msg_final = f"❌ Erro desconhecido: {erro_str}"
+        
+        if "SpreadsheetNotFound" in erro_str:
+            msg_final = f"❌ Não achei a planilha '{NOME_PLANILHA_GOOGLE}'. Verifique o nome exato ou se compartilhou com o email do JSON."
+        elif "invalid_grant" in erro_str:
+            msg_final = "❌ Chave inválida ou Data/Hora errada. O conteúdo do 'creds.json' pode estar corrompido."
+        elif "403" in erro_str:
+             msg_final = "❌ Erro 403: Sem permissão. Você esqueceu de ativar a 'Google Sheets API' ou 'Drive API' no Google Cloud?"
+        
+        if verbose: return None, msg_final
+        return None, msg_final
 
 def ler_carteira():
-    sh = conectar_google()
+    sh, _ = conectar_google()
     if sh:
         try:
             return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
@@ -91,19 +114,24 @@ def ler_carteira():
     return []
 
 def adicionar_ativo(novo_ativo):
-    sh = conectar_google()
+    # Tenta conectar e PEGA O MOTIVO DO ERRO se falhar
+    sh, mensagem_erro = conectar_google(verbose=True)
+    
     if sh:
         try:
             ws = sh.worksheet("Carteira")
             if novo_ativo.upper() in [x.strip().upper() for x in ws.col_values(1)]:
-                return "Já existe"
+                return "⚠️ Já existe na lista"
             ws.append_row([novo_ativo.upper()])
-            return "Sucesso"
-        except: return "Erro"
-    return "Erro Conexão"
+            return "✅ Sucesso! Adicionado."
+        except Exception as e:
+            return f"❌ Conectou no Google, mas falhou na aba 'Carteira'. A aba existe? Erro: {str(e)}"
+    else:
+        # Retorna o erro exato da conexão para o Telegram
+        return mensagem_erro
 
 def registrar_trade(ativo, preco, tipo="Compra"):
-    sh = conectar_google()
+    sh, _ = conectar_google()
     if sh:
         try:
             status = "Aberta" if tipo == "Compra" else "Encerrada"
@@ -113,7 +141,7 @@ def registrar_trade(ativo, preco, tipo="Compra"):
     return False
 
 def verificar_ultimo_status(ativo):
-    sh = conectar_google()
+    sh, _ = conectar_google()
     if sh:
         try:
             dados = sh.sheet1.get_all_values()
@@ -137,22 +165,22 @@ def executar_hunter():
             rec = handler.get_analysis().summary['RECOMMENDATION']
             if "STRONG_BUY" in rec:
                 res = adicionar_ativo(alvo['nome_sheet'])
-                if res == "Sucesso":
+                if res == "✅ Sucesso! Adicionado.":
                     relatorio.append(f"✅ {alvo['symbol']} (Novo!)")
                     novos += 1
-                elif res == "Já existe":
+                elif "Já existe" in res:
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
+                else:
+                    relatorio.append(f"❌ Erro Planilha: {res}")
             
             # --- O SEGREDO ANTI-BLOQUEIO ---
-            # Espera entre 5 e 10 segundos aleatoriamente
             tempo_espera = random.uniform(5, 10)
             print(f"Dormindo {tempo_espera:.1f}s para não travar...")
             time.sleep(tempo_espera) 
             
         except Exception as e:
-            # Se der erro 429, ele avisa mas não trava tudo
             relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
-            time.sleep(10) # Espera extra se der erro
+            time.sleep(10)
             
     # 2. Notícias e IA (Lista Estável)
     sentimento = "Iniciando..."
@@ -181,12 +209,11 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # VOLTAMOS PARA O BASICO E ESTAVEL
                 modelos = [
-                    "gemini-1.5-flash",        # O Oficial Rápido
-                    "gemini-1.5-flash-001",    # Versão Numerada
-                    "gemini-2.0-flash",        # Experimental (Deixei por último)
-                    "gemini-pro"               # O Fusca
+                    "gemini-1.5-flash",
+                    "gemini-1.5-flash-001",
+                    "gemini-2.0-flash",
+                    "gemini-pro"
                 ]
                 
                 sucesso = False
@@ -296,8 +323,14 @@ def callback_geral(call):
 
 @bot.message_handler(commands=['add'])
 def add_manual(m):
-    try: bot.reply_to(m, f"Resultado: {adicionar_ativo(m.text.split()[1].upper())}")
-    except: bot.reply_to(m, "Use: /add ATIVO")
+    try:
+        # Pega o que vem depois do /add (ex: PETR4)
+        ativo = m.text.split()[1].upper()
+        # Chama a função nova que retorna o erro detalhado
+        resultado = adicionar_ativo(ativo)
+        bot.reply_to(m, resultado)
+    except: 
+        bot.reply_to(m, "Uso incorreto. Digite: /add ATIVO")
 
 def loop_monitoramento():
     while True:
@@ -341,7 +374,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V19 (Modo Lento) 🐢"
+def home(): return "Robô V20 (Debug Sheets) 🕵️‍♂️"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
