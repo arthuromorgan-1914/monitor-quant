@@ -24,30 +24,28 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- SUA CHAVE (VALIDADA E TESTADA) ---
+# --- SUA CHAVE (Verifique se tirou a restrição no Google Cloud!) ---
 GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
 
 bot = telebot.TeleBot(TOKEN)
 
-# LISTA DE CAÇA (HUNTER)
+# LISTA DE CAÇA
 ALVOS_CAÇADOR = [
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
     {"symbol": "VALE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "VALE3.SA"},
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
-    # CRIPTO VIA YAHOO
     {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
     {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
     {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
-    # EUA
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
     {"symbol": "AAPL", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "AAPL"},
 ]
 
 # ==============================================================================
-# 2. FUNÇÃO DE DADOS (YAHOO UNIVERSAL)
+# 2. FUNÇÃO DE DADOS (YAHOO)
 # ==============================================================================
 def pegar_dados_yahoo(symbol):
     try:
@@ -62,20 +60,17 @@ def pegar_dados_yahoo(symbol):
 # 3. FUNÇÕES DO SHEETS
 # ==============================================================================
 def conectar_google(verbose=False):
-    if not os.path.exists('creds.json'):
-        return None, "❌ Erro: 'creds.json' não encontrado."
+    if not os.path.exists('creds.json'): return None, "❌ Erro: 'creds.json' sumiu."
     try:
         gc = gspread.service_account(filename='creds.json')
         sh = gc.open(NOME_PLANILHA_GOOGLE)
         return sh, "Sucesso"
-    except Exception as e:
-        return None, f"❌ Erro Google: {str(e)}"
+    except Exception as e: return None, f"❌ Erro Google: {str(e)}"
 
 def ler_carteira():
     sh, _ = conectar_google()
     if sh:
-        try:
-            return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
+        try: return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
         except: return []
     return []
 
@@ -85,11 +80,10 @@ def adicionar_ativo(novo_ativo):
         try:
             ws = sh.worksheet("Carteira")
             if novo_ativo.upper() in [x.strip().upper() for x in ws.col_values(1)]:
-                return "⚠️ Já existe na lista"
+                return "⚠️ Já existe."
             ws.append_row([novo_ativo.upper()])
             return "✅ Sucesso! Adicionado."
-        except Exception as e:
-            return f"❌ Erro Carteira: {str(e)}"
+        except Exception as e: return f"❌ Erro Carteira: {str(e)}"
     else: return msg
 
 def registrar_trade(ativo, preco, tipo="Compra"):
@@ -114,15 +108,14 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (ATUALIZADA PARA SUA CONTA 2.5) 💎
+# 4. INTEGRAÇÃO IA (AJUSTADA PARA SEU JSON) 💎
 # ==============================================================================
 def consultar_gemini(prompt):
-    # LISTA BASEADA NO SEU JSON (Do mais novo pro mais antigo)
+    # Esses nomes vieram do seu JSON. Um deles TEM que funcionar.
     modelos = [
-        "gemini-2.5-flash",      # A Ferrari (Topo da sua lista)
-        "gemini-2.0-flash",      # O Backup Estável
-        "gemini-flash-latest",   # O Genérico
-        "gemini-pro-latest"      # O Inteligente
+        "gemini-2.0-flash",       # Estável e rápido
+        "gemini-flash-latest",    # Genérico (aponta pro 1.5 ou 2.0)
+        "gemini-pro"              # Clássico
     ]
     
     ultimo_erro = ""
@@ -138,14 +131,14 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # Se der erro, tenta o próximo silenciosamente
-                ultimo_erro = f"{modelo}: {response.status_code}"
+                # Se der 403, é bloqueio de chave. Se der 404, é nome errado.
+                ultimo_erro = f"{modelo} deu erro {response.status_code}"
                 continue
         except Exception as e:
             ultimo_erro = str(e)
             continue
             
-    return f"❌ Nenhuma IA respondeu. Último erro: {ultimo_erro}"
+    return f"❌ Falha IA ({ultimo_erro}). Verifique se a chave tem restrição de API no Google Cloud."
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -153,7 +146,7 @@ def consultar_gemini(prompt):
 def analisar_ativo_tecnico(ativo):
     try:
         df = pegar_dados_yahoo(ativo)
-        if df is None or len(df) < 50: return "❌ Erro ao baixar dados do Yahoo."
+        if df is None or len(df) < 50: return "❌ Erro Yahoo Finance."
         
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
@@ -229,7 +222,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V28**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V29**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -299,7 +292,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V28 (Gemini 2.5)"
+def home(): return "QuantBot V29 (Permission Fix)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
