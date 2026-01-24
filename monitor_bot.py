@@ -25,8 +25,10 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- COLE SUA CHAVE AQUI DENTRO DAS ASPAS ---
-GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0" 
+# --- MANTIVE SUA CHAVE ATUAL ---
+# Se você criou um projeto novo pago, troque essa chave.
+# Se só ativou o pagamento no projeto atual, mantenha.
+GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -71,7 +73,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS (MODO DEBUG LIGADO 🕵️‍♂️)
+# 3. FUNÇÕES DO SHEETS (DEBUG + PRO)
 # ==============================================================================
 def conectar_google(verbose=False):
     if not os.path.exists('creds.json'):
@@ -90,11 +92,11 @@ def conectar_google(verbose=False):
         msg_final = f"❌ Erro desconhecido: {erro_str}"
         
         if "SpreadsheetNotFound" in erro_str:
-            msg_final = f"❌ Não achei a planilha '{NOME_PLANILHA_GOOGLE}'. Verifique o nome exato ou se compartilhou com o email do JSON."
+            msg_final = f"❌ Não achei a planilha '{NOME_PLANILHA_GOOGLE}'. Verifique o nome exato."
         elif "invalid_grant" in erro_str:
-            msg_final = "❌ Chave inválida. O conteúdo do 'creds.json' pode estar corrompido."
+            msg_final = "❌ Chave inválida. O 'creds.json' pode estar corrompido."
         elif "403" in erro_str:
-             msg_final = "❌ Erro 403: Sem permissão. Você esqueceu de ativar a 'Google Sheets API' ou 'Drive API' no Google Cloud?"
+             msg_final = "❌ Erro 403: Sem permissão. Ative a 'Google Sheets API' e 'Drive API'."
         
         if verbose: return None, msg_final
         return None, msg_final
@@ -117,7 +119,7 @@ def adicionar_ativo(novo_ativo):
             ws.append_row([novo_ativo.upper()])
             return "✅ Sucesso! Adicionado."
         except Exception as e:
-            return f"❌ Conectou no Google, mas falhou na aba 'Carteira'. Erro: {str(e)}"
+            return f"❌ Erro na aba 'Carteira': {str(e)}"
     else:
         return mensagem_erro
 
@@ -143,7 +145,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (LISTA DE IA ATUALIZADA V21)
+# 4. FUNÇÃO DO CAÇADOR (MODO PREMIUM ATIVADO 💎)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -156,7 +158,7 @@ def executar_hunter():
             rec = handler.get_analysis().summary['RECOMMENDATION']
             if "STRONG_BUY" in rec:
                 res = adicionar_ativo(alvo['nome_sheet'])
-                if res == "✅ Sucesso! Adicionado.":
+                if "Sucesso" in res:
                     relatorio.append(f"✅ {alvo['symbol']} (Novo!)")
                     novos += 1
                 elif "Já existe" in res:
@@ -165,17 +167,17 @@ def executar_hunter():
                     relatorio.append(f"❌ Erro Planilha: {res}")
             
             tempo_espera = random.uniform(5, 10)
-            print(f"Dormindo {tempo_espera:.1f}s para não travar...")
+            print(f"Dormindo {tempo_espera:.1f}s...")
             time.sleep(tempo_espera) 
             
         except Exception as e:
             relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             time.sleep(10)
             
-    # 2. Notícias e IA (Lista LIMPA - Sem modelos velhos)
+    # 2. Notícias e IA (AGORA COM MODELO PRO)
     sentimento = "Iniciando..."
     if "COLE_SUA_CHAVE" in GEMINI_KEY:
-        sentimento = "Erro: Chave não configurada no código."
+        sentimento = "Erro: Chave não configurada."
     else:
         try:
             manchetes = []
@@ -199,12 +201,12 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # --- AQUI ESTA A CORREÇÃO V21 ---
-                # Usamos apenas os modelos que sabemos que funcionam
+                # --- LISTA V23: PRIORIDADE PARA O PRO ---
+                # Como você paga, temos acesso a modelos melhores
                 modelos = [
-                    "gemini-2.0-flash",    # O mais novo
-                    "gemini-1.5-flash",    # O padrão rápido
-                    "gemini-1.5-pro",      # O padrão inteligente
+                    "gemini-1.5-pro",         # O CÉREBRO DE ELITE (Agora deve funcionar!)
+                    "gemini-1.5-flash",       # O Veloz (Backup)
+                    "gemini-2.0-flash"        # O Experimental
                 ]
                 
                 sucesso = False
@@ -235,7 +237,7 @@ def executar_hunter():
                         continue
 
                 if not sucesso:
-                    sentimento = f"Falha IA: {ultimo_erro}"
+                    sentimento = f"Falha IA: {ultimo_erro} (Tentei: {modelos})"
 
         except Exception as e:
             sentimento = f"Erro Geral IA: {str(e)}"
@@ -300,8 +302,8 @@ def callback_geral(call):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
         
         elif call.data == "CMD_HUNTER":
-            bot.answer_callback_query(call.id, "Iniciando caçada (Modo Seguro)...")
-            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu (Isso vai levar uns 2 minutos)...**\n(Estou indo devagar para não ser bloqueado)")
+            bot.answer_callback_query(call.id, "Iniciando caçada...")
+            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu...**\n(Isso leva ~2 minutos)")
             t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
             t.start()
             
@@ -320,6 +322,26 @@ def add_manual(m):
         bot.reply_to(m, resultado)
     except: 
         bot.reply_to(m, "Uso incorreto. Digite: /add ATIVO")
+
+@bot.message_handler(commands=['del'])
+def del_manual(m):
+    try:
+        ativo = m.text.split()[1].upper()
+        sh, _ = conectar_google()
+        if sh:
+            try:
+                ws = sh.worksheet("Carteira")
+                cell = ws.find(ativo)
+                ws.delete_rows(cell.row)
+                bot.reply_to(m, f"🗑️ **{ativo}** foi removido da lista!")
+            except gspread.exceptions.CellNotFound:
+                bot.reply_to(m, f"❌ Não achei **{ativo}** na aba Carteira.")
+            except Exception as e:
+                bot.reply_to(m, f"⚠️ Erro ao apagar: {str(e)}")
+        else:
+            bot.reply_to(m, "❌ Erro de conexão com a planilha.")
+    except:
+        bot.reply_to(m, "Uso incorreto. Digite: `/del ATIVO`")
 
 def loop_monitoramento():
     while True:
@@ -363,7 +385,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V21 (Lista IA Limpa) 🧹"
+def home(): return "Robô V23 (Premium - Pro 1.5) 💎"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
