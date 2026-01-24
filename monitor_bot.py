@@ -24,7 +24,7 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- SUA CHAVE (Verifique se tirou a restrição no Google Cloud!) ---
+# --- SUA CHAVE ATUAL ---
 GEMINI_KEY = "AIzaSyDLyUB_4G8ITkpF7a7MC6wRHz4AzJe25rY"
 
 bot = telebot.TeleBot(TOKEN)
@@ -108,17 +108,17 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (AJUSTADA PARA SEU JSON) 💎
+# 4. INTEGRAÇÃO IA (DEBUG DETALHADO V30) 💎
 # ==============================================================================
 def consultar_gemini(prompt):
-    # Esses nomes vieram do seu JSON. Um deles TEM que funcionar.
+    # Lista atualizada com base no SEU JSON (Do mais novo pro mais antigo)
     modelos = [
-        "gemini-2.0-flash",       # Estável e rápido
-        "gemini-flash-latest",    # Genérico (aponta pro 1.5 ou 2.0)
-        "gemini-pro"              # Clássico
+        "gemini-2.5-flash",       # Topo da sua lista
+        "gemini-2.0-flash",       # Estável
+        "gemini-1.5-flash-latest" # Backup clássico
     ]
     
-    ultimo_erro = ""
+    erros_log = [] # Vamos guardar todos os erros
     
     for modelo in modelos:
         try:
@@ -131,14 +131,15 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # Se der 403, é bloqueio de chave. Se der 404, é nome errado.
-                ultimo_erro = f"{modelo} deu erro {response.status_code}"
+                # Guarda o erro específico deste modelo
+                erros_log.append(f"{modelo}: {response.status_code}")
                 continue
         except Exception as e:
-            ultimo_erro = str(e)
+            erros_log.append(f"{modelo}: Erro {str(e)}")
             continue
             
-    return f"❌ Falha IA ({ultimo_erro}). Verifique se a chave tem restrição de API no Google Cloud."
+    # Se chegou aqui, todos falharam. Mostra o relatório completo.
+    return f"❌ Falha IA Detalhada: {' | '.join(erros_log)}"
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -222,7 +223,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V29**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V30**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -292,7 +293,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V29 (Permission Fix)"
+def home(): return "QuantBot V30 (Debug Completo)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
