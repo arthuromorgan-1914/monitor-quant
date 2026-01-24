@@ -25,26 +25,21 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- MANTIVE SUA CHAVE ATUAL ---
-# Se você criou um projeto novo pago, troque essa chave.
-# Se só ativou o pagamento no projeto atual, mantenha.
-GEMINI_KEY = "AIzaSyAFpziYqdveHwrQsJmbMDq_2F_YSXMvrVw"
+# --- SUA CHAVE ATIVA (V23/V24) ---
+GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
 
 bot = telebot.TeleBot(TOKEN)
 
 # LISTA DE CAÇA (HUNTER)
 ALVOS_CAÇADOR = [
-    # BRASIL (B3)
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
     {"symbol": "VALE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "VALE3.SA"},
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
-    # CRIPTO (Binance)
     {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
     {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
     {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
-    # EUA
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
     {"symbol": "AAPL", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "AAPL"},
@@ -57,7 +52,7 @@ def pegar_dados_binance(symbol):
     symbol_binance = symbol.replace("-", "/").replace("USD", "USDT")
     exchange = ccxt.binance()
     try:
-        candles = exchange.fetch_ohlcv(symbol_binance, timeframe='15m', limit=50)
+        candles = exchange.fetch_ohlcv(symbol_binance, timeframe='15m', limit=100)
         df = pd.DataFrame(candles, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
         df['Time'] = pd.to_datetime(df['Time'], unit='ms')
         df['Close'] = df['Close'].astype(float)
@@ -68,16 +63,16 @@ def pegar_dados_binance(symbol):
 
 def pegar_dados_yahoo(symbol):
     try:
-        df = yf.Ticker(symbol).history(period="5d", interval="15m")
+        df = yf.Ticker(symbol).history(period="1mo", interval="15m") # Pegando mais dados para o calculo ficar preciso
         return df
     except: return None
 
 # ==============================================================================
-# 3. FUNÇÕES DO SHEETS (DEBUG + PRO)
+# 3. FUNÇÕES DO SHEETS
 # ==============================================================================
 def conectar_google(verbose=False):
     if not os.path.exists('creds.json'):
-        msg = "❌ Erro Crítico: O arquivo 'creds.json' NÃO está no Render. Verifique em 'Secret Files'."
+        msg = "❌ Erro Crítico: O arquivo 'creds.json' NÃO está no Render."
         if verbose: return None, msg
         print(msg)
         return None, msg
@@ -86,20 +81,8 @@ def conectar_google(verbose=False):
         gc = gspread.service_account(filename='creds.json')
         sh = gc.open(NOME_PLANILHA_GOOGLE)
         return sh, "Sucesso"
-
     except Exception as e:
-        erro_str = str(e)
-        msg_final = f"❌ Erro desconhecido: {erro_str}"
-        
-        if "SpreadsheetNotFound" in erro_str:
-            msg_final = f"❌ Não achei a planilha '{NOME_PLANILHA_GOOGLE}'. Verifique o nome exato."
-        elif "invalid_grant" in erro_str:
-            msg_final = "❌ Chave inválida. O 'creds.json' pode estar corrompido."
-        elif "403" in erro_str:
-             msg_final = "❌ Erro 403: Sem permissão. Ative a 'Google Sheets API' e 'Drive API'."
-        
-        if verbose: return None, msg_final
-        return None, msg_final
+        return None, f"❌ Erro Google: {str(e)}"
 
 def ler_carteira():
     sh, _ = conectar_google()
@@ -145,7 +128,63 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (MODO PREMIUM ATIVADO 💎)
+# 4. FUNÇÃO DE INTEGRAÇÃO COM GEMINI (SERVIÇO IA)
+# ==============================================================================
+def consultar_gemini(prompt):
+    modelos = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
+    
+    for modelo in modelos:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
+            headers = {'Content-Type': 'application/json'}
+            data = {"contents": [{"parts": [{"text": prompt}]}]}
+            
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+            if response.status_code == 200:
+                return response.json()['candidates'][0]['content']['parts'][0]['text']
+            else:
+                continue # Tenta o próximo modelo
+        except:
+            continue
+            
+    return "❌ A IA não conseguiu responder agora (Erro de Conexão)."
+
+# ==============================================================================
+# 5. NOVO COMANDO: ANALISAR ATIVO
+# ==============================================================================
+def analisar_ativo_tecnico(ativo):
+    try:
+        # 1. Pega dados
+        if "USD" in ativo: df = pegar_dados_binance(ativo)
+        else: df = pegar_dados_yahoo(ativo)
+        
+        if df is None or len(df) < 50: return "❌ Não consegui ler os dados desse ativo."
+        
+        # 2. Calcula Indicadores
+        sma9 = ta.sma(df['Close'], length=9).iloc[-1]
+        sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+        rsi = ta.rsi(df['Close'], length=14).iloc[-1]
+        preco_atual = df['Close'].iloc[-1]
+        
+        tendencia = "ALTA" if sma9 > sma21 else "BAIXA"
+        
+        # 3. Monta o Prompt para a IA
+        prompt = (
+            f"Atue como um analista de trading Quant Sênior. Analise o ativo {ativo} agora. "
+            f"Dados Técnicos (Gráfico 15min): Preço: {preco_atual:.2f} | RSI(14): {rsi:.1f} | "
+            f"Média Curta (9): {sma9:.2f} | Média Longa (21): {sma21:.2f}. "
+            f"A tendência das médias está de {tendencia}. "
+            "Resuma em 3 ou 4 linhas curtas: Qual o sentimento técnico? Há sinal de compra ou venda? Use emojis."
+        )
+        
+        return consultar_gemini(prompt)
+        
+    except Exception as e:
+        return f"Erro na análise: {str(e)}"
+
+# ==============================================================================
+# 6. FUNÇÃO DO CAÇADOR (HUNTER)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
@@ -163,190 +202,131 @@ def executar_hunter():
                     novos += 1
                 elif "Já existe" in res:
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-                else:
-                    relatorio.append(f"❌ Erro Planilha: {res}")
             
-            tempo_espera = random.uniform(5, 10)
-            print(f"Dormindo {tempo_espera:.1f}s...")
-            time.sleep(tempo_espera) 
+            time.sleep(random.uniform(2, 5))
             
         except Exception as e:
-            relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
-            time.sleep(10)
+            time.sleep(5)
             
-    # 2. Notícias e IA (AGORA COM MODELO PRO)
-    sentimento = "Iniciando..."
-    if "COLE_SUA_CHAVE" in GEMINI_KEY:
-        sentimento = "Erro: Chave não configurada."
-    else:
+    # 2. Notícias e IA
+    try:
+        manchetes = []
+        feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
         try:
-            manchetes = []
-            feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
-            try:
-                for url in feeds:
-                    d = feedparser.parse(url)
-                    if d.entries:
-                        for entry in d.entries[:3]:
-                            manchetes.append(f"Título: {entry.title} | Link: {entry.link}")
-            except: pass
-            
-            if not manchetes:
-                sentimento = "Aviso: Sem notícias no RSS."
-            else:
-                prompt = (
-                    f"Analise estas manchetes financeiras: {manchetes}. "
-                    "Responda EXATAMENTE neste formato de 3 linhas (use emojis):\n"
-                    "Sentimento: (Resumo curto do humor do mercado)\n"
-                    "Destaque: (A notícia mais relevante resumida)\n"
-                    "Fonte: (O link da notícia destaque)"
-                )
-                
-                # --- LISTA V23: PRIORIDADE PARA O PRO ---
-                # Como você paga, temos acesso a modelos melhores
-                modelos = [
-                    "gemini-1.5-pro",         # O CÉREBRO DE ELITE (Agora deve funcionar!)
-                    "gemini-1.5-flash",       # O Veloz (Backup)
-                    "gemini-2.0-flash"        # O Experimental
-                ]
-                
-                sucesso = False
-                ultimo_erro = ""
-                
-                for modelo in modelos:
-                    if sucesso: break
-                    try:
-                        url_google = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
-                        headers = {'Content-Type': 'application/json'}
-                        data = {"contents": [{"parts": [{"text": prompt}]}]}
-                        
-                        response = requests.post(url_google, headers=headers, json=data, timeout=30)
-                        
-                        if response.status_code == 200:
-                            try:
-                                sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
-                                sucesso = True
-                            except:
-                                ultimo_erro = "JSON vazio"
-                                continue
-                        else:
-                            ultimo_erro = f"Erro {response.status_code} no {modelo}"
-                            continue
-                            
-                    except Exception as e:
-                        ultimo_erro = str(e)
-                        continue
-
-                if not sucesso:
-                    sentimento = f"Falha IA: {ultimo_erro} (Tentei: {modelos})"
-
-        except Exception as e:
-            sentimento = f"Erro Geral IA: {str(e)}"
+            for url in feeds:
+                d = feedparser.parse(url)
+                if d.entries:
+                    for entry in d.entries[:3]:
+                        manchetes.append(f"Título: {entry.title}")
+        except: pass
+        
+        if not manchetes:
+            sentimento = "Sem notícias."
+        else:
+            prompt_news = (
+                f"Analise estas manchetes: {manchetes}. "
+                "Responda EXATAMENTE: Sentimento: (Resumo) | Destaque: (Melhor notícia)."
+            )
+            sentimento = consultar_gemini(prompt_news)
+    except Exception as e:
+        sentimento = f"Erro IA News: {str(e)}"
 
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 5. TAREFA EM SEGUNDO PLANO
+# 7. AUTOMAÇÃO E TAREFAS
 # ==============================================================================
 def tarefa_hunter_background(chat_id):
     try:
         achados, humor, n = executar_hunter()
-        
-        txt = f"📋 RELATÓRIO HUNTER\n\n🌡️ Clima: {humor}\n\n"
+        txt = f"📋 RELATÓRIO HUNTER\n\n🌡️ {humor}\n\n"
         txt += "\n".join(achados) if achados else "🚫 Nada em 'Compra Forte'."
-        txt += f"\n\n🔢 Novos: {n}"
-        
         bot.send_message(chat_id, txt, parse_mode=None, disable_web_page_preview=True)
-        
     except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Erro ao gerar relatório: {e}")
+        bot.send_message(chat_id, f"⚠️ Erro relatório: {e}")
 
-# ==============================================================================
-# 6. AUTOMAÇÃO E BOT
-# ==============================================================================
 def enviar_relatorio_agendado():
-    try:
-        bot.send_message(CHAT_ID, "⏰ **Relatório Automático**\nIniciando análise...")
-        tarefa_hunter_background(CHAT_ID)
-    except Exception as e:
-        print(f"Erro no agendamento: {e}")
+    tarefa_hunter_background(CHAT_ID)
 
 def thread_agendamento():
     schedule.every().day.at("07:00").do(enviar_relatorio_agendado)
     schedule.every().day.at("10:15").do(enviar_relatorio_agendado)
     schedule.every().day.at("13:00").do(enviar_relatorio_agendado)
     schedule.every().day.at("16:00").do(enviar_relatorio_agendado)
-    schedule.every().day.at("18:30").do(enviar_relatorio_agendado)
-    schedule.every().day.at("21:00").do(enviar_relatorio_agendado)
     while True:
         schedule.run_pending()
         time.sleep(60)
 
-@bot.message_handler(commands=['start', 'menu', 'status'])
+# ==============================================================================
+# 8. HANDLERS TELEGRAM
+# ==============================================================================
+@bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🔫 Caçar Oportunidades (Hunter)", callback_data="CMD_HUNTER"))
-    markup.row(InlineKeyboardButton("📋 Ver Lista de Vigília", callback_data="CMD_LISTA"))
-    bot.reply_to(message, "🤖 **Painel Quant**\nO que deseja?", reply_markup=markup, parse_mode="Markdown")
+    markup.row(InlineKeyboardButton("🔫 Hunter (Caçar)", callback_data="CMD_HUNTER"))
+    markup.row(InlineKeyboardButton("📋 Ver Lista", callback_data="CMD_LISTA"))
+    bot.reply_to(message, "🤖 **Painel Quant**\nComandos:\n/add ATIVO\n/del ATIVO\n/analisar ATIVO", reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_geral(call):
-    try:
-        if call.data.startswith("COMPRA|"):
-            _, ativo, preco = call.data.split("|")
-            if registrar_trade(ativo, preco, "Compra"):
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n✅ **COMPRA REGISTRADA!**")
+    if call.data.startswith("COMPRA|"):
+        _, ativo, preco = call.data.split("|")
+        if registrar_trade(ativo, preco, "Compra"):
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n✅ REGISTRADO!")
+    
+    elif call.data.startswith("VENDA|"):
+        _, ativo, preco = call.data.split("|")
+        if registrar_trade(ativo, preco, "Venda"):
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n🔴 REGISTRADO!")
+    
+    elif call.data == "CMD_HUNTER":
+        bot.answer_callback_query(call.id, "Caçando...")
+        threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,)).start()
         
-        elif call.data.startswith("VENDA|"):
-            _, ativo, preco = call.data.split("|")
-            if registrar_trade(ativo, preco, "Venda"):
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
-        
-        elif call.data == "CMD_HUNTER":
-            bot.answer_callback_query(call.id, "Iniciando caçada...")
-            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu...**\n(Isso leva ~2 minutos)")
-            t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
-            t.start()
-            
-        elif call.data == "CMD_LISTA":
-            lista = ler_carteira()
-            txt = f"📋 **Vigiando {len(lista)}:**\n" + "\n".join([f"`{x}`" for x in lista])
-            bot.send_message(CHAT_ID, txt, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Erro Callback: {e}")
+    elif call.data == "CMD_LISTA":
+        lista = ler_carteira()
+        bot.send_message(CHAT_ID, f"📋 **Vigiando:**\n" + "\n".join([f"`{x}`" for x in lista]), parse_mode="Markdown")
 
 @bot.message_handler(commands=['add'])
 def add_manual(m):
-    try:
-        ativo = m.text.split()[1].upper()
-        resultado = adicionar_ativo(ativo)
-        bot.reply_to(m, resultado)
-    except: 
-        bot.reply_to(m, "Uso incorreto. Digite: /add ATIVO")
+    try: bot.reply_to(m, adicionar_ativo(m.text.split()[1].upper()))
+    except: bot.reply_to(m, "Use: /add ATIVO")
 
 @bot.message_handler(commands=['del'])
 def del_manual(m):
     try:
         ativo = m.text.split()[1].upper()
         sh, _ = conectar_google()
-        if sh:
-            try:
-                ws = sh.worksheet("Carteira")
-                cell = ws.find(ativo)
-                ws.delete_rows(cell.row)
-                bot.reply_to(m, f"🗑️ **{ativo}** foi removido da lista!")
-            except gspread.exceptions.CellNotFound:
-                bot.reply_to(m, f"❌ Não achei **{ativo}** na aba Carteira.")
-            except Exception as e:
-                bot.reply_to(m, f"⚠️ Erro ao apagar: {str(e)}")
-        else:
-            bot.reply_to(m, "❌ Erro de conexão com a planilha.")
-    except:
-        bot.reply_to(m, "Uso incorreto. Digite: `/del ATIVO`")
+        ws = sh.worksheet("Carteira")
+        ws.delete_rows(ws.find(ativo).row)
+        bot.reply_to(m, f"🗑️ {ativo} deletado!")
+    except: bot.reply_to(m, "Erro ou não encontrado.")
 
+# --- COMANDO NOVO: ANALISAR ---
+@bot.message_handler(commands=['analisar'])
+def analisar_cmd(m):
+    try:
+        # Pega o ativo
+        ativo = m.text.split()[1].upper()
+        msg_wait = bot.reply_to(m, f"🕵️‍♂️ **Analisando {ativo}...**\n(Calculando indicadores e consultando IA)")
+        
+        # Chama a função inteligente
+        analise = analisar_ativo_tecnico(ativo)
+        
+        # Edita a mensagem com a resposta
+        bot.edit_message_text(chat_id=m.chat.id, message_id=msg_wait.message_id, text=f"📊 **Análise IA: {ativo}**\n\n{analise}", parse_mode="Markdown")
+        
+    except IndexError:
+        bot.reply_to(m, "⚠️ Use: `/analisar ATIVO` (ex: `/analisar PETR4.SA`)")
+    except Exception as e:
+        bot.reply_to(m, f"Erro: {e}")
+
+# ==============================================================================
+# 9. LOOP PRINCIPAL
+# ==============================================================================
 def loop_monitoramento():
     while True:
         try:
-            print(f"--- Ciclo {datetime.now().strftime('%H:%M')} ---")
             carteira = ler_carteira()
             cache = Path.home() / ".cache" / "py-yfinance"
             if cache.exists(): shutil.rmtree(cache)
@@ -355,7 +335,6 @@ def loop_monitoramento():
                 try:
                     if "USD" in ativo: df = pegar_dados_binance(ativo)
                     else: df = pegar_dados_yahoo(ativo)
-
                     if df is None or len(df) < 50: continue
                     
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
@@ -364,19 +343,18 @@ def loop_monitoramento():
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
                     preco = df['Close'].iloc[-1]
-                    fmt = f"{preco:.8f}" if preco < 1 else f"{preco:.2f}"
                     
-                    ultimo_status = verificar_ultimo_status(ativo)
+                    last = verificar_ultimo_status(ativo)
 
-                    if (sma9 > sma21) and (sma9_prev <= sma21_prev) and (rsi < 70) and (ultimo_status != "Compra"):
+                    if (sma9 > sma21) and (sma9_prev <= sma21_prev) and (rsi < 70) and (last != "Compra"):
                         markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"📝 Registrar @ {fmt}", callback_data=f"COMPRA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🟢 **COMPRA**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 > 21", reply_markup=markup, parse_mode="Markdown")
+                        markup.add(InlineKeyboardButton(f"Comprar @ {preco:.2f}", callback_data=f"COMPRA|{ativo}|{preco:.2f}"))
+                        bot.send_message(CHAT_ID, f"🟢 **SINAL COMPRA**: {ativo}\nPreço: {preco:.2f}", reply_markup=markup)
 
-                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev) and (ultimo_status != "Venda"):
+                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev) and (last != "Venda"):
                         markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"📉 Registrar Saída @ {fmt}", callback_data=f"VENDA|{ativo}|{fmt}"))
-                        bot.send_message(CHAT_ID, f"🔴 **VENDA (SAÍDA)**\nAtivo: {ativo}\nPreço: {fmt}\nRSI: {rsi:.0f}\nCruzamento: 9 < 21", reply_markup=markup, parse_mode="Markdown")
+                        markup.add(InlineKeyboardButton(f"Vender @ {preco:.2f}", callback_data=f"VENDA|{ativo}|{preco:.2f}"))
+                        bot.send_message(CHAT_ID, f"🔴 **SINAL VENDA**: {ativo}\nPreço: {preco:.2f}", reply_markup=markup)
                     
                     time.sleep(1)
                 except: pass
@@ -385,7 +363,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V23 (Premium - Pro 1.5) 💎"
+def home(): return "Robô V24 (Analista IA) 🕵️‍♂️"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
