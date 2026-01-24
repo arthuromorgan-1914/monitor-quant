@@ -8,7 +8,7 @@ import pandas as pd
 import pandas_ta as ta
 import time
 import threading
-import random  # Importante para o tempo aleatório
+import random 
 from flask import Flask
 from datetime import datetime
 from pathlib import Path
@@ -74,7 +74,6 @@ def pegar_dados_yahoo(symbol):
 # 3. FUNÇÕES DO SHEETS (MODO DEBUG LIGADO 🕵️‍♂️)
 # ==============================================================================
 def conectar_google(verbose=False):
-    # 1. Verifica se o arquivo existe fisicamente
     if not os.path.exists('creds.json'):
         msg = "❌ Erro Crítico: O arquivo 'creds.json' NÃO está no Render. Verifique em 'Secret Files'."
         if verbose: return None, msg
@@ -82,23 +81,18 @@ def conectar_google(verbose=False):
         return None, msg
 
     try:
-        # 2. Tenta autenticar (Logar na conta)
         gc = gspread.service_account(filename='creds.json')
-        
-        # 3. Tenta abrir a planilha pelo nome
         sh = gc.open(NOME_PLANILHA_GOOGLE)
         return sh, "Sucesso"
 
     except Exception as e:
         erro_str = str(e)
-        print(f"❌ ERRO GOOGLE DETALHADO: {erro_str}")
-        
         msg_final = f"❌ Erro desconhecido: {erro_str}"
         
         if "SpreadsheetNotFound" in erro_str:
             msg_final = f"❌ Não achei a planilha '{NOME_PLANILHA_GOOGLE}'. Verifique o nome exato ou se compartilhou com o email do JSON."
         elif "invalid_grant" in erro_str:
-            msg_final = "❌ Chave inválida ou Data/Hora errada. O conteúdo do 'creds.json' pode estar corrompido."
+            msg_final = "❌ Chave inválida. O conteúdo do 'creds.json' pode estar corrompido."
         elif "403" in erro_str:
              msg_final = "❌ Erro 403: Sem permissão. Você esqueceu de ativar a 'Google Sheets API' ou 'Drive API' no Google Cloud?"
         
@@ -114,9 +108,7 @@ def ler_carteira():
     return []
 
 def adicionar_ativo(novo_ativo):
-    # Tenta conectar e PEGA O MOTIVO DO ERRO se falhar
     sh, mensagem_erro = conectar_google(verbose=True)
-    
     if sh:
         try:
             ws = sh.worksheet("Carteira")
@@ -125,9 +117,8 @@ def adicionar_ativo(novo_ativo):
             ws.append_row([novo_ativo.upper()])
             return "✅ Sucesso! Adicionado."
         except Exception as e:
-            return f"❌ Conectou no Google, mas falhou na aba 'Carteira'. A aba existe? Erro: {str(e)}"
+            return f"❌ Conectou no Google, mas falhou na aba 'Carteira'. Erro: {str(e)}"
     else:
-        # Retorna o erro exato da conexão para o Telegram
         return mensagem_erro
 
 def registrar_trade(ativo, preco, tipo="Compra"):
@@ -152,13 +143,13 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (ANTI-BLOQUEIO 429)
+# 4. FUNÇÃO DO CAÇADOR (LISTA DE IA ATUALIZADA V21)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
     novos = 0
     
-    # 1. Scanner Técnico (COM DELAY HUMANO)
+    # 1. Scanner Técnico
     for alvo in ALVOS_CAÇADOR:
         try:
             handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
@@ -173,7 +164,6 @@ def executar_hunter():
                 else:
                     relatorio.append(f"❌ Erro Planilha: {res}")
             
-            # --- O SEGREDO ANTI-BLOQUEIO ---
             tempo_espera = random.uniform(5, 10)
             print(f"Dormindo {tempo_espera:.1f}s para não travar...")
             time.sleep(tempo_espera) 
@@ -182,7 +172,7 @@ def executar_hunter():
             relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             time.sleep(10)
             
-    # 2. Notícias e IA (Lista Estável)
+    # 2. Notícias e IA (Lista LIMPA - Sem modelos velhos)
     sentimento = "Iniciando..."
     if "COLE_SUA_CHAVE" in GEMINI_KEY:
         sentimento = "Erro: Chave não configurada no código."
@@ -209,11 +199,12 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
+                # --- AQUI ESTA A CORREÇÃO V21 ---
+                # Usamos apenas os modelos que sabemos que funcionam
                 modelos = [
-                    "gemini-1.5-flash",
-                    "gemini-1.5-flash-001",
-                    "gemini-2.0-flash",
-                    "gemini-pro"
+                    "gemini-2.0-flash",    # O mais novo
+                    "gemini-1.5-flash",    # O padrão rápido
+                    "gemini-1.5-pro",      # O padrão inteligente
                 ]
                 
                 sucesso = False
@@ -324,9 +315,7 @@ def callback_geral(call):
 @bot.message_handler(commands=['add'])
 def add_manual(m):
     try:
-        # Pega o que vem depois do /add (ex: PETR4)
         ativo = m.text.split()[1].upper()
-        # Chama a função nova que retorna o erro detalhado
         resultado = adicionar_ativo(ativo)
         bot.reply_to(m, resultado)
     except: 
@@ -374,7 +363,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V20 (Debug Sheets) 🕵️‍♂️"
+def home(): return "Robô V21 (Lista IA Limpa) 🧹"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
