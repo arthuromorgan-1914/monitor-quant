@@ -8,6 +8,7 @@ import pandas as pd
 import pandas_ta as ta
 import time
 import threading
+import random  # Importante para o tempo aleatório
 from flask import Flask
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +25,7 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- ATENÇÃO: COLE SUA CHAVE AQUI DENTRO DAS ASPAS PARA O TESTE FINAL ---
+# --- COLE SUA CHAVE DENTRO DAS ASPAS ---
 GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0" 
 
 bot = telebot.TeleBot(TOKEN)
@@ -123,13 +124,13 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DO CAÇADOR (LISTA ATUALIZADA 2.0)
+# 4. FUNÇÃO DO CAÇADOR (ANTI-BLOQUEIO 429)
 # ==============================================================================
 def executar_hunter():
     relatorio = []
     novos = 0
     
-    # 1. Scanner Técnico
+    # 1. Scanner Técnico (COM DELAY HUMANO)
     for alvo in ALVOS_CAÇADOR:
         try:
             handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
@@ -141,14 +142,22 @@ def executar_hunter():
                     novos += 1
                 elif res == "Já existe":
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
-            time.sleep(1) 
-        except Exception as e:
-            relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
             
-    # 2. Notícias e IA (Tenta Modelos do seu JSON)
+            # --- O SEGREDO ANTI-BLOQUEIO ---
+            # Espera entre 5 e 10 segundos aleatoriamente
+            tempo_espera = random.uniform(5, 10)
+            print(f"Dormindo {tempo_espera:.1f}s para não travar...")
+            time.sleep(tempo_espera) 
+            
+        except Exception as e:
+            # Se der erro 429, ele avisa mas não trava tudo
+            relatorio.append(f"Erro {alvo['symbol']}: {str(e)}")
+            time.sleep(10) # Espera extra se der erro
+            
+    # 2. Notícias e IA (Lista Estável)
     sentimento = "Iniciando..."
-    if "COLE_SUA_CHAVE" in GEMINI_KEY: # Checagem de segurança
-        sentimento = "Erro: Você esqueceu de colar a chave no código!"
+    if "COLE_SUA_CHAVE" in GEMINI_KEY:
+        sentimento = "Erro: Chave não configurada no código."
     else:
         try:
             manchetes = []
@@ -172,12 +181,12 @@ def executar_hunter():
                     "Fonte: (O link da notícia destaque)"
                 )
                 
-                # LISTA BASEADA NO SEU JSON (Os modelos que sua conta vê)
+                # VOLTAMOS PARA O BASICO E ESTAVEL
                 modelos = [
-                    "gemini-2.0-flash",        # O mais moderno que apareceu na sua lista
-                    "gemini-flash-latest",     # Alias genérico seguro
-                    "gemini-1.5-flash",        # Padrão
-                    "gemini-pro"               # Fallback antigo
+                    "gemini-1.5-flash",        # O Oficial Rápido
+                    "gemini-1.5-flash-001",    # Versão Numerada
+                    "gemini-2.0-flash",        # Experimental (Deixei por último)
+                    "gemini-pro"               # O Fusca
                 ]
                 
                 sucesso = False
@@ -197,10 +206,10 @@ def executar_hunter():
                                 sentimento = response.json()['candidates'][0]['content']['parts'][0]['text']
                                 sucesso = True
                             except:
-                                ultimo_erro = "JSON inválido"
+                                ultimo_erro = "JSON vazio"
                                 continue
                         else:
-                            ultimo_erro = f"Erro {response.status_code} em {modelo}"
+                            ultimo_erro = f"Erro {response.status_code} no {modelo}"
                             continue
                             
                     except Exception as e:
@@ -273,8 +282,8 @@ def callback_geral(call):
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n🔴 **VENDA REGISTRADA!**")
         
         elif call.data == "CMD_HUNTER":
-            bot.answer_callback_query(call.id, "Iniciando caçada...")
-            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu para a caça...**\n(Aguarde, te aviso quando voltar!)")
+            bot.answer_callback_query(call.id, "Iniciando caçada (Modo Seguro)...")
+            bot.send_message(CHAT_ID, "🕵️ **O Caçador saiu (Isso vai levar uns 2 minutos)...**\n(Estou indo devagar para não ser bloqueado)")
             t = threading.Thread(target=tarefa_hunter_background, args=(CHAT_ID,))
             t.start()
             
@@ -332,11 +341,10 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V18 (Bala de Prata) 🚀"
+def home(): return "Robô V19 (Modo Lento) 🐢"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
     threading.Thread(target=thread_agendamento).start()
-    # A LINHA ABAIXO FOI A QUE DEU ERRO. AQUI ESTÁ A CORREÇÃO:
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
     bot.infinity_polling()
