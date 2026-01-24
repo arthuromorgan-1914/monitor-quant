@@ -24,7 +24,7 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- SUA CHAVE ATUAL ---
+# --- SUA CHAVE (CONFIRMADA: AIzaSyDL...) ---
 GEMINI_KEY = "AIzaSyDLyUB_4G8ITkpF7a7MC6wRHz4AzJe25rY"
 
 bot = telebot.TeleBot(TOKEN)
@@ -108,17 +108,17 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (DEBUG DETALHADO V30) 💎
+# 4. INTEGRAÇÃO IA (MODO REVELAÇÃO TOTAL) 🕵️‍♂️
 # ==============================================================================
 def consultar_gemini(prompt):
-    # Lista atualizada com base no SEU JSON (Do mais novo pro mais antigo)
+    # Lista baseada no seu JSON
     modelos = [
-        "gemini-2.5-flash",       # Topo da sua lista
-        "gemini-2.0-flash",       # Estável
-        "gemini-1.5-flash-latest" # Backup clássico
+        "gemini-2.0-flash",       
+        "gemini-2.5-flash", 
+        "gemini-1.5-flash-latest" 
     ]
     
-    erros_log = [] # Vamos guardar todos os erros
+    erros_log = [] 
     
     for modelo in modelos:
         try:
@@ -131,15 +131,18 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # Guarda o erro específico deste modelo
-                erros_log.append(f"{modelo}: {response.status_code}")
+                # AQUI ESTÁ A MUDANÇA: response.text mostra o motivo real do erro
+                erro_google = response.text 
+                erros_log.append(f"\n🔴 {modelo} ({response.status_code}): {erro_google}")
                 continue
         except Exception as e:
-            erros_log.append(f"{modelo}: Erro {str(e)}")
+            erros_log.append(f"\n⚠️ {modelo}: {str(e)}")
             continue
             
-    # Se chegou aqui, todos falharam. Mostra o relatório completo.
-    return f"❌ Falha IA Detalhada: {' | '.join(erros_log)}"
+    # Retorna o relatório completo de falhas
+    msg_final = f"❌ DIAGNÓSTICO DO ERRO:\n{''.join(erros_log)}"
+    # Corta a mensagem se for muito grande pro Telegram
+    return msg_final[:3000]
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -223,7 +226,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V30**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V31**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -293,7 +296,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V30 (Debug Completo)"
+def home(): return "QuantBot V31 (Modo Revelação)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
