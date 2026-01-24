@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 import feedparser
 from tradingview_ta import TA_Handler, Interval, Exchange
-import ccxt
 import schedule
 import requests
 
@@ -25,47 +24,45 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- SUA CHAVE ATIVA (V23/V24) ---
+# --- CHAVE ATIVA (DO PROJETO PAGO) ---
 GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
 
 bot = telebot.TeleBot(TOKEN)
 
-# LISTA DE CAÇA (HUNTER)
+# LISTA DE CAÇA (HUNTER - USADA PELO TRADINGVIEW)
 ALVOS_CAÇADOR = [
+    # Ações BR
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
     {"symbol": "VALE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "VALE3.SA"},
     {"symbol": "WEGE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "WEGE3.SA"},
     {"symbol": "PRIO3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PRIO3.SA"},
     {"symbol": "ITUB4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "ITUB4.SA"},
+    # Cripto (TradingView usa Símbolo sem hífen, Planilha usa com hífen pro Yahoo)
     {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "BTC-USD"},
     {"symbol": "ETHUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "ETH-USD"},
     {"symbol": "SOLUSDT", "screener": "crypto", "exchange": "BINANCE", "nome_sheet": "SOL-USD"},
+    # EUA
     {"symbol": "NVDA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "NVDA"},
     {"symbol": "TSLA", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "TSLA"},
     {"symbol": "AAPL", "screener": "america", "exchange": "NASDAQ", "nome_sheet": "AAPL"},
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES DE DADOS (MERCADO)
+# 2. FUNÇÃO DE DADOS (UNIFICADA - YAHOO)
 # ==============================================================================
-def pegar_dados_binance(symbol):
-    symbol_binance = symbol.replace("-", "/").replace("USD", "USDT")
-    exchange = ccxt.binance()
-    try:
-        candles = exchange.fetch_ohlcv(symbol_binance, timeframe='15m', limit=100)
-        df = pd.DataFrame(candles, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        df['Time'] = pd.to_datetime(df['Time'], unit='ms')
-        df['Close'] = df['Close'].astype(float)
-        return df
-    except Exception as e:
-        print(f"⚠️ Erro Binance ({symbol}): {e}")
-        return None
-
 def pegar_dados_yahoo(symbol):
     try:
-        df = yf.Ticker(symbol).history(period="1mo", interval="15m") # Pegando mais dados para o calculo ficar preciso
+        # Pega dados de 1 mês para garantir médias precisas
+        # Yahoo suporta tanto "PETR4.SA" quanto "BTC-USD"
+        df = yf.Ticker(symbol).history(period="1mo", interval="15m")
+        
+        if df is None or df.empty:
+            return None
+            
         return df
-    except: return None
+    except Exception as e:
+        print(f"⚠️ Erro Yahoo ({symbol}): {e}")
+        return None
 
 # ==============================================================================
 # 3. FUNÇÕES DO SHEETS
@@ -128,7 +125,7 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. FUNÇÃO DE INTEGRAÇÃO COM GEMINI (SERVIÇO IA)
+# 4. INTEGRAÇÃO IA (GEMINI PRO + FLASH)
 # ==============================================================================
 def consultar_gemini(prompt):
     modelos = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
@@ -144,24 +141,22 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                continue # Tenta o próximo modelo
+                continue 
         except:
             continue
             
-    return "❌ A IA não conseguiu responder agora (Erro de Conexão)."
+    return "❌ IA Indisponível (Erro Conexão Google)."
 
 # ==============================================================================
-# 5. NOVO COMANDO: ANALISAR ATIVO
+# 5. COMANDO: /analisar ATIVO
 # ==============================================================================
 def analisar_ativo_tecnico(ativo):
     try:
-        # 1. Pega dados
-        if "USD" in ativo: df = pegar_dados_binance(ativo)
-        else: df = pegar_dados_yahoo(ativo)
+        # Usa Yahoo para tudo
+        df = pegar_dados_yahoo(ativo)
         
-        if df is None or len(df) < 50: return "❌ Não consegui ler os dados desse ativo."
+        if df is None or len(df) < 50: return "❌ Não consegui ler os dados (Yahoo Finance)."
         
-        # 2. Calcula Indicadores
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
         rsi = ta.rsi(df['Close'], length=14).iloc[-1]
@@ -169,13 +164,12 @@ def analisar_ativo_tecnico(ativo):
         
         tendencia = "ALTA" if sma9 > sma21 else "BAIXA"
         
-        # 3. Monta o Prompt para a IA
         prompt = (
-            f"Atue como um analista de trading Quant Sênior. Analise o ativo {ativo} agora. "
-            f"Dados Técnicos (Gráfico 15min): Preço: {preco_atual:.2f} | RSI(14): {rsi:.1f} | "
-            f"Média Curta (9): {sma9:.2f} | Média Longa (21): {sma21:.2f}. "
-            f"A tendência das médias está de {tendencia}. "
-            "Resuma em 3 ou 4 linhas curtas: Qual o sentimento técnico? Há sinal de compra ou venda? Use emojis."
+            f"Atue como um analista Quant Sênior. Analise o ativo {ativo} agora. "
+            f"Dados Técnicos (15min): Preço: {preco_atual:.2f} | RSI(14): {rsi:.1f} | "
+            f"Média(9): {sma9:.2f} | Média(21): {sma21:.2f}. "
+            f"Tendência médias: {tendencia}. "
+            "Resuma em 3 linhas: Sentimento técnico? Compra ou Venda? Use emojis."
         )
         
         return consultar_gemini(prompt)
@@ -184,13 +178,13 @@ def analisar_ativo_tecnico(ativo):
         return f"Erro na análise: {str(e)}"
 
 # ==============================================================================
-# 6. FUNÇÃO DO CAÇADOR (HUNTER)
+# 6. FUNÇÃO HUNTER
 # ==============================================================================
 def executar_hunter():
     relatorio = []
     novos = 0
     
-    # 1. Scanner Técnico
+    # Scanner Técnico (Via TradingView - Não é bloqueado)
     for alvo in ALVOS_CAÇADOR:
         try:
             handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
@@ -204,11 +198,9 @@ def executar_hunter():
                     relatorio.append(f"⚠️ {alvo['symbol']} (Já vigiando)")
             
             time.sleep(random.uniform(2, 5))
+        except: time.sleep(5)
             
-        except Exception as e:
-            time.sleep(5)
-            
-    # 2. Notícias e IA
+    # Notícias (Via Gemini)
     try:
         manchetes = []
         feeds = ["https://www.infomoney.com.br/feed/", "https://br.investing.com/rss/news.rss"]
@@ -221,20 +213,20 @@ def executar_hunter():
         except: pass
         
         if not manchetes:
-            sentimento = "Sem notícias."
+            sentimento = "Sem notícias recentes."
         else:
             prompt_news = (
-                f"Analise estas manchetes: {manchetes}. "
+                f"Analise: {manchetes}. "
                 "Responda EXATAMENTE: Sentimento: (Resumo) | Destaque: (Melhor notícia)."
             )
             sentimento = consultar_gemini(prompt_news)
     except Exception as e:
-        sentimento = f"Erro IA News: {str(e)}"
+        sentimento = f"Erro IA: {str(e)}"
 
     return relatorio, sentimento, novos
 
 # ==============================================================================
-# 7. AUTOMAÇÃO E TAREFAS
+# 7. AGENDAMENTO E TAREFAS
 # ==============================================================================
 def tarefa_hunter_background(chat_id):
     try:
@@ -302,22 +294,15 @@ def del_manual(m):
         bot.reply_to(m, f"🗑️ {ativo} deletado!")
     except: bot.reply_to(m, "Erro ou não encontrado.")
 
-# --- COMANDO NOVO: ANALISAR ---
 @bot.message_handler(commands=['analisar'])
 def analisar_cmd(m):
     try:
-        # Pega o ativo
         ativo = m.text.split()[1].upper()
-        msg_wait = bot.reply_to(m, f"🕵️‍♂️ **Analisando {ativo}...**\n(Calculando indicadores e consultando IA)")
-        
-        # Chama a função inteligente
+        msg_wait = bot.reply_to(m, f"🕵️‍♂️ **Analisando {ativo}...**")
         analise = analisar_ativo_tecnico(ativo)
-        
-        # Edita a mensagem com a resposta
         bot.edit_message_text(chat_id=m.chat.id, message_id=msg_wait.message_id, text=f"📊 **Análise IA: {ativo}**\n\n{analise}", parse_mode="Markdown")
-        
     except IndexError:
-        bot.reply_to(m, "⚠️ Use: `/analisar ATIVO` (ex: `/analisar PETR4.SA`)")
+        bot.reply_to(m, "Use: `/analisar ATIVO`")
     except Exception as e:
         bot.reply_to(m, f"Erro: {e}")
 
@@ -327,14 +312,16 @@ def analisar_cmd(m):
 def loop_monitoramento():
     while True:
         try:
+            print(f"--- Ciclo {datetime.now().strftime('%H:%M')} ---")
             carteira = ler_carteira()
             cache = Path.home() / ".cache" / "py-yfinance"
             if cache.exists(): shutil.rmtree(cache)
 
             for ativo in carteira:
                 try:
-                    if "USD" in ativo: df = pegar_dados_binance(ativo)
-                    else: df = pegar_dados_yahoo(ativo)
+                    # Agora TUDO passa pelo Yahoo (Ações e Cripto)
+                    df = pegar_dados_yahoo(ativo)
+                    
                     if df is None or len(df) < 50: continue
                     
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
@@ -363,7 +350,7 @@ def loop_monitoramento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Robô V24 (Analista IA) 🕵️‍♂️"
+def home(): return "Robô V25 (Universal Yahoo) 🌍"
 
 if __name__ == "__main__":
     threading.Thread(target=loop_monitoramento).start()
