@@ -28,7 +28,7 @@ NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 # --- MANTIVE SUA CHAVE ATUAL ---
 # Se você criou um projeto novo pago, troque essa chave.
 # Se só ativou o pagamento no projeto atual, mantenha.
-GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
+GEMINI_KEY = "AIzaSyDLyUB_4G8ITkpF7a7MC6wRHz4AzJe25rY"
 
 bot = telebot.TeleBot(TOKEN)
 
