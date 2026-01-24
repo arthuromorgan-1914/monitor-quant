@@ -24,8 +24,9 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- SUA CHAVE (CONFIRMADA: AIzaSyDL...) ---
-GEMINI_KEY = "AIzaSyDLyUB_4G8ITkpF7a7MC6wRHz4AzJe25rY"
+# --- 🛑 AQUI ESTÁ O SEGREDO! ---
+# Cole a chave NOVA que você testou no navegador e deu certo.
+GEMINI_KEY = "AIzaSyA9HqUYO3G2_5o9l2fL3T44CmrGn6H-Dck"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -108,17 +109,17 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (MODO REVELAÇÃO TOTAL) 🕵️‍♂️
+# 4. INTEGRAÇÃO IA (V33 - SIMPLIFICADA) ✨
 # ==============================================================================
 def consultar_gemini(prompt):
-    # Lista baseada no seu JSON
+    # Lista otimizada para sua conta paga
     modelos = [
-        "gemini-2.0-flash",       
-        "gemini-2.5-flash", 
-        "gemini-1.5-flash-latest" 
+        "gemini-2.0-flash", 
+        "gemini-1.5-flash", 
+        "gemini-pro"
     ]
     
-    erros_log = [] 
+    erros = []
     
     for modelo in modelos:
         try:
@@ -131,18 +132,13 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # AQUI ESTÁ A MUDANÇA: response.text mostra o motivo real do erro
-                erro_google = response.text 
-                erros_log.append(f"\n🔴 {modelo} ({response.status_code}): {erro_google}")
-                continue
+                erros.append(f"{modelo}: {response.status_code}")
+                continue 
         except Exception as e:
-            erros_log.append(f"\n⚠️ {modelo}: {str(e)}")
+            erros.append(f"{modelo}: {str(e)}")
             continue
             
-    # Retorna o relatório completo de falhas
-    msg_final = f"❌ DIAGNÓSTICO DO ERRO:\n{''.join(erros_log)}"
-    # Corta a mensagem se for muito grande pro Telegram
-    return msg_final[:3000]
+    return f"❌ Erro IA: {', '.join(erros)}. Verifique se a chave no código é a mesma do Google Cloud."
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -226,7 +222,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V31**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V33**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -296,7 +292,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V31 (Modo Revelação)"
+def home(): return "QuantBot V33 (Chave Renovada)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
