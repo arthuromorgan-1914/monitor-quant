@@ -25,7 +25,7 @@ CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
 # --- SUA CHAVE (Verifique se tirou a restrição no Google Cloud!) ---
-GEMINI_KEY = "AIzaSyC052VU7LJ5YeS0J8095BEuADDy4WTvpV0"
+GEMINI_KEY = "AIzaSyDLyUB_4G8ITkpF7a7MC6wRHz4AzJe25rY"
 
 bot = telebot.TeleBot(TOKEN)
 
