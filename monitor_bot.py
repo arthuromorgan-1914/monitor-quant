@@ -60,7 +60,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. GOOGLE SHEETS (GERENCIADOR)
+# 3. GOOGLE SHEETS
 # ==============================================================================
 def conectar_google():
     if not os.path.exists('creds.json'): return None
@@ -78,7 +78,6 @@ def ler_carteira_vigilancia():
     return []
 
 def registrar_sugestao(ativo, sinal, preco):
-    """Aba Sugestoes"""
     sh = conectar_google()
     if sh:
         try:
@@ -90,14 +89,12 @@ def registrar_sugestao(ativo, sinal, preco):
     return False
 
 def registrar_portfolio_real(ativo, tipo, preco):
-    """Aba Portfolio (Dinheiro Real)"""
     sh = conectar_google()
     if sh:
         try:
             try: ws = sh.worksheet("Portfolio")
             except: ws = sh.add_worksheet(title="Portfolio", rows=1000, cols=6)
             
-            # Define status visual
             if tipo.upper() in ["COMPRA", "COMPRAR"]:
                 status = "🟢 Aberta"
                 tipo_normalizado = "Compra"
@@ -111,7 +108,7 @@ def registrar_portfolio_real(ativo, tipo, preco):
     return False
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (CONSULTOR)
+# 4. INTEGRAÇÃO IA (CONSULTOR + HUNTER NEWS)
 # ==============================================================================
 def consultar_gemini(prompt):
     modelos = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash"]
@@ -124,7 +121,7 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
         except: continue
-    return "❌ IA Indisponível (Verifique Chave/Faturamento)."
+    return "❌ IA Indisponível."
 
 def buscar_oportunidades_mercado():
     candidatas = []
@@ -157,16 +154,17 @@ def analisar_ativo_tecnico(ativo):
     except: return "Erro análise."
 
 # ==============================================================================
-# 5. TELEGRAM HANDLERS (NOVOS COMANDOS MANUAIS) 🎮
+# 5. TELEGRAM HANDLERS
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("🎩 Consultor", callback_data="CMD_CONSULTOR"))
+    markup.row(InlineKeyboardButton("📰 Hunter (Notícias + Sinais)", callback_data="CMD_HUNTER"))
+    markup.row(InlineKeyboardButton("🎩 Consultor (Alocação)", callback_data="CMD_CONSULTOR"))
     markup.row(InlineKeyboardButton("📂 Ver Portfólio", callback_data="CMD_PORTFOLIO"))
     
     txt = (
-        "🤖 **QuantBot V40**\n\n"
+        "🤖 **QuantBot V41**\n\n"
         "**Comandos Manuais:**\n"
         "`/comprar ATIVO PRECO` -> Registra entrada.\n"
         "`/vender ATIVO PRECO` -> Registra saída.\n\n"
@@ -177,7 +175,6 @@ def menu_principal(message):
 @bot.message_handler(commands=['comprar'])
 def manual_buy(m):
     try:
-        # Formato: /comprar PETR4 30.50
         partes = m.text.split()
         ativo = partes[1].upper()
         preco = partes[2].replace(",", ".")
@@ -189,7 +186,6 @@ def manual_buy(m):
 @bot.message_handler(commands=['vender'])
 def manual_sell(m):
     try:
-        # Formato: /vender PETR4 32.00
         partes = m.text.split()
         ativo = partes[1].upper()
         preco = partes[2].replace(",", ".")
@@ -200,10 +196,9 @@ def manual_sell(m):
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
-    # --- BOTÕES DE SINAL (AÇÃO) ---
+    # --- AÇÕES DE SINAL ---
     if c.data.startswith("REAL|"):
         _, tipo, ativo, preco = c.data.split("|")
-        # Se o botão for de Venda Real
         if registrar_portfolio_real(ativo, tipo, preco):
             emoji = "✅" if tipo == "COMPRA" else "🔻"
             bot.send_message(c.message.chat.id, f"{emoji} **{ativo}** ({tipo}) registrado no Portfólio a {preco}!")
@@ -217,7 +212,7 @@ def callback(c):
         bot.answer_callback_query(c.id, "Arquivado.")
         bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"👀 Sugestão de {ativo} arquivada.")
 
-    # --- COMANDOS DO MENU ---
+    # --- MENU ---
     elif c.data == "CMD_CONSULTOR":
         msg = bot.send_message(c.message.chat.id, "💰 Quanto quer investir?", reply_markup=ForceReply())
         bot.register_next_step_handler(msg, lambda m: bot.reply_to(m, gerar_alocacao(float(m.text.replace(",", ".")))))
@@ -229,20 +224,20 @@ def callback(c):
             txt = "📂 **Últimos Registros (Real):**\n"
             for row in dados: txt += f"{row[1]} | {row[2]} | {row[3]}\n"
             bot.send_message(c.message.chat.id, txt, parse_mode="Markdown")
-        except: bot.send_message(c.message.chat.id, "Portfólio vazio ou erro de leitura.")
+        except: bot.send_message(c.message.chat.id, "Portfólio vazio.")
 
     elif c.data == "CMD_HUNTER":
-        bot.answer_callback_query(c.id, "Buscando...")
+        bot.answer_callback_query(c.id, "Lendo notícias e mercado...")
+        # Chama a Thread para não travar o bot enquanto a IA pensa
         threading.Thread(target=enviar_relatorio_agendado).start()
 
 # ==============================================================================
-# 6. LOOP DE MONITORAMENTO INTELIGENTE
+# 6. LOOP DE MONITORAMENTO
 # ==============================================================================
 def loop():
     while True:
         try:
             lista_vigilancia = ler_carteira_vigilancia()
-            
             for atv in lista_vigilancia:
                 try:
                     df = pegar_dados_yahoo(atv)
@@ -265,7 +260,6 @@ def loop():
                     if sinal:
                         chave_memoria = f"{atv}_{sinal}_{datetime.now().day}"
                         if chave_memoria not in ultimo_sinal_enviado:
-                            
                             markup = InlineKeyboardMarkup()
                             if sinal == "COMPRA":
                                 btn_real = InlineKeyboardButton(f"✅ Comprei Real", callback_data=f"REAL|COMPRA|{atv}|{preco_str}")
@@ -273,32 +267,52 @@ def loop():
                             else:
                                 btn_real = InlineKeyboardButton(f"🔻 Vendi Real", callback_data=f"REAL|VENDA|{atv}|{preco_str}")
                                 emoji = "🔴"
-                                
-                            btn_sugest = InlineKeyboardButton(f"👀 Apenas Ciente", callback_data=f"SUGEST|{sinal}|{atv}|{preco_str}")
                             
+                            btn_sugest = InlineKeyboardButton(f"👀 Apenas Ciente", callback_data=f"SUGEST|{sinal}|{atv}|{preco_str}")
                             markup.add(btn_real, btn_sugest)
                             
                             bot.send_message(CHAT_ID, f"{emoji} **SINAL {sinal}**: {atv}\nPreço: {preco_str}\nRSI: {rsi:.1f}", reply_markup=markup)
                             ultimo_sinal_enviado[chave_memoria] = True
-
                     time.sleep(1)
                 except: pass
             time.sleep(900)
         except: time.sleep(60)
 
-# Rotinas Agendadas
-def executar_hunter():
+# ==============================================================================
+# 7. FUNÇÃO HUNTER COMPLETA (NOTÍCIAS + TÉCNICA) 📰
+# ==============================================================================
+def executar_hunter_completo():
+    # 1. Busca Notícias (RSS)
+    sentimento = "Sem notícias."
+    try:
+        manchetes = []
+        d = feedparser.parse("https://br.investing.com/rss/news.rss")
+        for entry in d.entries[:4]: manchetes.append(entry.title)
+        
+        if manchetes:
+            prompt = f"Resuma o sentimento geral do mercado financeiro em 2 linhas com base nestas manchetes: {manchetes}. Use emojis."
+            sentimento = consultar_gemini(prompt)
+    except: pass
+
+    # 2. Busca Sinais Técnicos (TradingView)
     achados = []
     for alvo in ALVOS_CAÇADOR:
         try:
             h = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
             if "STRONG" in h.get_analysis().summary['RECOMMENDATION']: achados.append(f"🔥 {alvo['symbol']}")
         except: pass
-    return achados
+        
+    return sentimento, achados
 
 def enviar_relatorio_agendado():
-    achados = executar_hunter()
-    bot.send_message(CHAT_ID, f"📋 **HUNTER:**\n" + ("\n".join(achados) if achados else "Nada relevante."))
+    humor, achados = executar_hunter_completo()
+    txt_sinais = "\n".join(achados) if achados else "🚫 Sem sinais de 'Compra Forte' agora."
+    
+    msg = (
+        f"🗞️ **NOTÍCIAS DO MERCADO**\n{humor}\n\n"
+        f"🏹 **OPORTUNIDADES (Hunter):**\n{txt_sinais}"
+    )
+    bot.send_message(CHAT_ID, msg)
 
 def thread_agendamento():
     times = ["09:30", "13:00", "16:30"]
@@ -307,7 +321,7 @@ def thread_agendamento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V40 (Gestão Full)"
+def home(): return "QuantBot V41 (Hunter com Notícias)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
