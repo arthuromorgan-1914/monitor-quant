@@ -25,14 +25,14 @@ CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
 # --- 🛑 COLE SUA CHAVE NOVA AQUI ---
-GEMINI_KEY = "AIzaSyA9HqUYO3G2_5o9l2fL3T44CmrGn6H-Dck"
+GEMINI_KEY = "COLE_SUA_CHAVE_NOVA_AQUI"
 
 bot = telebot.TeleBot(TOKEN)
 
-# CONTROLE DE SINAIS REPETIDOS (COOLDOWN)
-ultimo_aviso = {} 
+# CONTROLE DE SINAIS (Memória RAM)
+ultimo_sinal_enviado = {} 
 
-# LISTA UNIVERSAL
+# LISTA UNIVERSAL (Monitoramento)
 ALVOS_CAÇADOR = [
     {"symbol": "PETR4", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "PETR4.SA"},
     {"symbol": "VALE3", "screener": "brazil", "exchange": "BMFBOVESPA", "nome_sheet": "VALE3.SA"},
@@ -60,7 +60,7 @@ def pegar_dados_yahoo(symbol):
     except: return None
 
 # ==============================================================================
-# 3. GOOGLE SHEETS
+# 3. GOOGLE SHEETS (GERENCIADOR)
 # ==============================================================================
 def conectar_google():
     if not os.path.exists('creds.json'): return None
@@ -69,265 +69,245 @@ def conectar_google():
         return gc.open(NOME_PLANILHA_GOOGLE)
     except: return None
 
-def ler_carteira():
+def ler_carteira_vigilancia():
+    """Lê ativos para vigiar (Aba Carteira)"""
     sh = conectar_google()
     if sh:
         try: return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
         except: return []
     return []
 
-def registrar_trade(ativo, preco, tipo="Compra"):
+def registrar_sugestao(ativo, sinal, preco):
+    """Aba Sugestoes"""
     sh = conectar_google()
     if sh:
         try:
-            status = "Aberta" if tipo == "Compra" else "Encerrada"
-            sh.sheet1.append_row([datetime.now().strftime('%d/%m %H:%M'), ativo, tipo, preco, "", "", status])
+            try: ws = sh.worksheet("Sugestoes")
+            except: ws = sh.add_worksheet(title="Sugestoes", rows=1000, cols=5)
+            ws.append_row([datetime.now().strftime('%d/%m/%Y'), ativo, sinal, preco])
             return True
         except: return False
     return False
 
-def verificar_ultimo_status(ativo):
+def registrar_portfolio_real(ativo, tipo, preco):
+    """Aba Portfolio (Dinheiro Real)"""
     sh = conectar_google()
     if sh:
         try:
-            dados = sh.sheet1.get_all_values()
-            for linha in reversed(dados):
-                if len(linha) > 2 and linha[1].strip().upper() == ativo.strip().upper():
-                    return linha[2].strip()
-        except: return None
-    return None
+            try: ws = sh.worksheet("Portfolio")
+            except: ws = sh.add_worksheet(title="Portfolio", rows=1000, cols=6)
+            
+            # Define status visual
+            if tipo.upper() in ["COMPRA", "COMPRAR"]:
+                status = "🟢 Aberta"
+                tipo_normalizado = "Compra"
+            else:
+                status = "🔴 Encerrada"
+                tipo_normalizado = "Venda"
+                
+            ws.append_row([datetime.now().strftime('%d/%m %H:%M'), ativo, tipo_normalizado, preco, status])
+            return True
+        except: return False
+    return False
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (MODO DEBUG ATIVADO) 🐞
+# 4. INTEGRAÇÃO IA (CONSULTOR)
 # ==============================================================================
 def consultar_gemini(prompt):
-    modelos = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"]
-    erros = []
-    
+    modelos = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash"]
     for modelo in modelos:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
             headers = {'Content-Type': 'application/json'}
             data = {"contents": [{"parts": [{"text": prompt}]}]}
-            
             response = requests.post(url, headers=headers, json=data, timeout=30)
-            
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
-            else:
-                # Agora mostra o erro real para sabermos o que houve
-                erros.append(f"{modelo}: {response.text}")
-                continue 
-        except Exception as e:
-            erros.append(f"{modelo}: {str(e)}")
-            continue
-            
-    # Retorna o relatório de erro se falhar
-    return f"⚠️ ERRO IA DETALHADO:\n{erros[0] if erros else 'Erro desconhecido'}"
+        except: continue
+    return "❌ IA Indisponível (Verifique Chave/Faturamento)."
 
-# ==============================================================================
-# 5. CONSULTOR ROBO-ADVISOR
-# ==============================================================================
 def buscar_oportunidades_mercado():
     candidatas = []
-    # Lista segura e rápida (Top 20) para não travar o Render
-    pool_expandido = [
-        "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "PRIO3", "RENT3", 
-        "GGBR4", "SUZB3", "BPAC11", "EQTL3", "RADL3", "RAIL3", "RDOR3", "CMIG4", 
-        "ELET3", "LREN3", "TOTS3", "CSAN3"
-    ]
-    
-    for simbolo in pool_expandido:
+    pool = ["PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "PRIO3", "RENT3", "GGBR4", "CMIG4", "ELET3"]
+    for simbolo in pool:
         try:
             handler = TA_Handler(symbol=simbolo, screener="brazil", exchange="BMFBOVESPA", interval=Interval.INTERVAL_1_DAY)
             analise = handler.get_analysis()
-            rec = analise.summary['RECOMMENDATION']
-            
-            if "BUY" in rec: 
-                rsi = analise.indicators.get("RSI", 50)
-                fechamento = analise.indicators.get("close", 0)
-                tag = "🔥" if "STRONG" in rec else "✅"
-                candidatas.append(f"{simbolo} ({tag} | R$ {fechamento:.2f})")
+            if "BUY" in analise.summary['RECOMMENDATION']:
+                candidatas.append(f"{simbolo} (R$ {analise.indicators.get('close',0):.2f})")
         except: continue
-        
     return candidatas
 
-def gerar_alocacao(valor_investimento):
-    oportunidades = buscar_oportunidades_mercado()
-    
-    if not oportunidades:
-        return "⚠️ O scanner não encontrou tendências claras de alta hoje."
-
-    manchetes = []
-    try:
-        d = feedparser.parse("https://br.investing.com/rss/news.rss")
-        for entry in d.entries[:3]: manchetes.append(entry.title)
-    except: pass
-
-    prompt = (
-        f"Atue como Robo-Advisor. Cliente investe R$ {valor_investimento}. "
-        f"Notícias: {manchetes}. "
-        f"Oportunidades Técnicas: {', '.join(oportunidades)}. "
-        f"TAREFA: Monte uma carteira com 3 ativos dessa lista. Distribua o valor. "
-        f"Justifique. Use emojis."
-    )
-    
+def gerar_alocacao(valor):
+    ops = buscar_oportunidades_mercado()
+    if not ops: return "⚠️ Sem tendências claras no Top 10 hoje."
+    prompt = f"Atue como Robo-Advisor. Cliente investe R$ {valor}. Oportunidades: {', '.join(ops)}. Monte uma carteira com 3 ativos. Justifique."
     return consultar_gemini(prompt)
 
-# ==============================================================================
-# 6. ANÁLISE TÉCNICA
-# ==============================================================================
 def analisar_ativo_tecnico(ativo):
     try:
         df = pegar_dados_yahoo(ativo)
-        if df is None or len(df) < 50: return "❌ Erro dados."
-        
+        if df is None: return "Erro dados."
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
         rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-        preco = df['Close'].iloc[-1]
         tendencia = "ALTA" if sma9 > sma21 else "BAIXA"
-        
-        prompt = (
-            f"Analise {ativo}. Preço: {preco} | RSI: {rsi:.1f} | "
-            f"Médias: 9({sma9:.2f}) vs 21({sma21:.2f}). Tendência: {tendencia}. "
-            "Resuma em 3 linhas: Análise técnica e recomendação."
-        )
+        prompt = f"Analise {ativo}. Preço: {df['Close'].iloc[-1]:.2f} | RSI: {rsi:.1f} | M9 vs M21: {sma9:.2f}/{sma21:.2f} ({tendencia}). Resuma cenário técnico."
         return consultar_gemini(prompt)
-    except Exception as e: return str(e)
+    except: return "Erro análise."
 
 # ==============================================================================
-# 7. TELEGRAM HANDLERS
+# 5. TELEGRAM HANDLERS (NOVOS COMANDOS MANUAIS) 🎮
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🔫 Hunter (Oportunidades)", callback_data="CMD_HUNTER"))
-    markup.row(InlineKeyboardButton("🎩 Consultor (Alocação)", callback_data="CMD_CONSULTOR"))
-    markup.row(InlineKeyboardButton("📋 Minha Lista", callback_data="CMD_LISTA"))
+    markup.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("🎩 Consultor", callback_data="CMD_CONSULTOR"))
+    markup.row(InlineKeyboardButton("📂 Ver Portfólio", callback_data="CMD_PORTFOLIO"))
     
-    texto = (
-        "🤖 **QuantBot V38 - Correção de Bug**\n\n"
-        "Sistema operacional.\n"
-        "Escolha uma função:"
+    txt = (
+        "🤖 **QuantBot V40**\n\n"
+        "**Comandos Manuais:**\n"
+        "`/comprar ATIVO PRECO` -> Registra entrada.\n"
+        "`/vender ATIVO PRECO` -> Registra saída.\n\n"
+        "Exemplo: `/vender PETR4 35.50`"
     )
-    bot.reply_to(message, texto, reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(commands=['comprar'])
+def manual_buy(m):
+    try:
+        # Formato: /comprar PETR4 30.50
+        partes = m.text.split()
+        ativo = partes[1].upper()
+        preco = partes[2].replace(",", ".")
+        if registrar_portfolio_real(ativo, "Compra", preco):
+            bot.reply_to(m, f"✅ Compra de **{ativo}** a R$ {preco} registrada no Portfólio!", parse_mode="Markdown")
+        else: bot.reply_to(m, "❌ Erro na planilha.")
+    except: bot.reply_to(m, "⚠️ Use: `/comprar ATIVO PREÇO`")
+
+@bot.message_handler(commands=['vender'])
+def manual_sell(m):
+    try:
+        # Formato: /vender PETR4 32.00
+        partes = m.text.split()
+        ativo = partes[1].upper()
+        preco = partes[2].replace(",", ".")
+        if registrar_portfolio_real(ativo, "Venda", preco):
+            bot.reply_to(m, f"🔻 Venda de **{ativo}** a R$ {preco} registrada no Portfólio!", parse_mode="Markdown")
+        else: bot.reply_to(m, "❌ Erro na planilha.")
+    except: bot.reply_to(m, "⚠️ Use: `/vender ATIVO PREÇO`")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
-    if c.data == "CMD_HUNTER":
-        bot.answer_callback_query(c.id, "Iniciando varredura...")
-        bot.send_message(c.message.chat.id, "🔎 Hunter rodando... (Aguarde o relatório)")
-        # AQUI ESTAVA O ERRO: Chamamos a thread corretamente agora
+    # --- BOTÕES DE SINAL (AÇÃO) ---
+    if c.data.startswith("REAL|"):
+        _, tipo, ativo, preco = c.data.split("|")
+        # Se o botão for de Venda Real
+        if registrar_portfolio_real(ativo, tipo, preco):
+            emoji = "✅" if tipo == "COMPRA" else "🔻"
+            bot.send_message(c.message.chat.id, f"{emoji} **{ativo}** ({tipo}) registrado no Portfólio a {preco}!")
+            bot.answer_callback_query(c.id, "Registrado!")
+        else:
+            bot.send_message(c.message.chat.id, "❌ Erro ao salvar.")
+
+    elif c.data.startswith("SUGEST|"):
+        _, tipo, ativo, preco = c.data.split("|")
+        registrar_sugestao(ativo, tipo, preco)
+        bot.answer_callback_query(c.id, "Arquivado.")
+        bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"👀 Sugestão de {ativo} arquivada.")
+
+    # --- COMANDOS DO MENU ---
+    elif c.data == "CMD_CONSULTOR":
+        msg = bot.send_message(c.message.chat.id, "💰 Quanto quer investir?", reply_markup=ForceReply())
+        bot.register_next_step_handler(msg, lambda m: bot.reply_to(m, gerar_alocacao(float(m.text.replace(",", ".")))))
+    
+    elif c.data == "CMD_PORTFOLIO":
+        sh = conectar_google()
+        try: 
+            dados = sh.worksheet("Portfolio").get_all_values()[-5:]
+            txt = "📂 **Últimos Registros (Real):**\n"
+            for row in dados: txt += f"{row[1]} | {row[2]} | {row[3]}\n"
+            bot.send_message(c.message.chat.id, txt, parse_mode="Markdown")
+        except: bot.send_message(c.message.chat.id, "Portfólio vazio ou erro de leitura.")
+
+    elif c.data == "CMD_HUNTER":
+        bot.answer_callback_query(c.id, "Buscando...")
         threading.Thread(target=enviar_relatorio_agendado).start()
 
-    elif c.data == "CMD_CONSULTOR":
-        msg = bot.send_message(c.message.chat.id, "💰 **Consultor Financeiro**\n\nQual valor você deseja investir? (Ex: 1000)", reply_markup=ForceReply())
-        bot.register_next_step_handler(msg, passo_consultor_valor)
-
-    elif c.data == "CMD_LISTA":
-        bot.send_message(c.message.chat.id, f"📋 **Vigiando:**\n" + "\n".join(ler_carteira()), parse_mode="Markdown")
-
-    elif "COMPRA|" in c.data or "VENDA|" in c.data:
-        op, atv, prc = c.data.split("|")
-        registrar_trade(atv, prc, op)
-        bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"✅ {op} {atv} registrada!")
-
-def passo_consultor_valor(message):
-    try:
-        valor = float(message.text.replace(",", ".").replace("R$", ""))
-        bot.send_chat_action(message.chat.id, 'typing')
-        bot.reply_to(message, f"🤖 Analisando Top 20 do Ibovespa para R$ {valor:.2f}...\n⏳ Aguarde...")
-        
-        sugestao = gerar_alocacao(valor)
-        bot.reply_to(message, f"🎩 **Sugestão:**\n\n{sugestao}", parse_mode="Markdown")
-    except ValueError:
-        bot.reply_to(message, "❌ Use apenas números.")
-
-@bot.message_handler(commands=['add'])
-def add(m):
-    try: 
-        sh = conectar_google()
-        sh.worksheet("Carteira").append_row([m.text.split()[1].upper()])
-        bot.reply_to(m, "✅ Adicionado!")
-    except: bot.reply_to(m, "Erro.")
-
-@bot.message_handler(commands=['analisar'])
-def analise(m):
-    try:
-        atv = m.text.split()[1].upper()
-        res = analisar_ativo_tecnico(atv)
-        bot.reply_to(m, f"📊 **{atv}**\n{res}", parse_mode="Markdown")
-    except: bot.reply_to(m, "Use: /analisar ATIVO")
-
 # ==============================================================================
-# 8. LOOP E AGENDAMENTO
+# 6. LOOP DE MONITORAMENTO INTELIGENTE
 # ==============================================================================
 def loop():
     while True:
         try:
-            for atv in ler_carteira():
+            lista_vigilancia = ler_carteira_vigilancia()
+            
+            for atv in lista_vigilancia:
                 try:
                     df = pegar_dados_yahoo(atv)
                     if df is None: continue
                     
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+                    sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
+                    sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
                     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
                     preco = df['Close'].iloc[-1]
                     preco_str = formatar_preco(preco)
 
-                    agora = time.time()
-                    if atv in ultimo_aviso and (agora - ultimo_aviso[atv] < 1800): continue
-                    last = verificar_ultimo_status(atv)
-
-                    if (sma9 > sma21) and (rsi < 70) and (last != "Compra"):
-                        markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"Comprar @ {preco_str}", callback_data=f"COMPRA|{atv}|{preco_str}"))
-                        bot.send_message(CHAT_ID, f"🟢 **COMPRA**: {atv}\nPreço: {preco_str}", reply_markup=markup)
-                        ultimo_aviso[atv] = agora
-
-                    elif (sma9 < sma21) and (last != "Venda"):
-                        markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton(f"Vender @ {preco_str}", callback_data=f"VENDA|{atv}|{preco_str}"))
-                        bot.send_message(CHAT_ID, f"🔴 **VENDA**: {atv}\nPreço: {preco_str}", reply_markup=markup)
-                        ultimo_aviso[atv] = agora
+                    sinal = None
+                    if (sma9 > sma21) and (sma9_prev <= sma21_prev) and (rsi < 70):
+                        sinal = "COMPRA"
+                    elif (sma9 < sma21) and (sma9_prev >= sma21_prev):
+                        sinal = "VENDA"
                     
+                    if sinal:
+                        chave_memoria = f"{atv}_{sinal}_{datetime.now().day}"
+                        if chave_memoria not in ultimo_sinal_enviado:
+                            
+                            markup = InlineKeyboardMarkup()
+                            if sinal == "COMPRA":
+                                btn_real = InlineKeyboardButton(f"✅ Comprei Real", callback_data=f"REAL|COMPRA|{atv}|{preco_str}")
+                                emoji = "🟢"
+                            else:
+                                btn_real = InlineKeyboardButton(f"🔻 Vendi Real", callback_data=f"REAL|VENDA|{atv}|{preco_str}")
+                                emoji = "🔴"
+                                
+                            btn_sugest = InlineKeyboardButton(f"👀 Apenas Ciente", callback_data=f"SUGEST|{sinal}|{atv}|{preco_str}")
+                            
+                            markup.add(btn_real, btn_sugest)
+                            
+                            bot.send_message(CHAT_ID, f"{emoji} **SINAL {sinal}**: {atv}\nPreço: {preco_str}\nRSI: {rsi:.1f}", reply_markup=markup)
+                            ultimo_sinal_enviado[chave_memoria] = True
+
                     time.sleep(1)
                 except: pass
             time.sleep(900)
         except: time.sleep(60)
 
-# FUNÇÃO HUNTER CORRIGIDA (AGORA FAZ ALGO!)
+# Rotinas Agendadas
 def executar_hunter():
-    relatorio = []
-    # Usa a lista ALVOS_CAÇADOR padrão para ser rápido
+    achados = []
     for alvo in ALVOS_CAÇADOR:
         try:
-            handler = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
-            if "STRONG_BUY" in handler.get_analysis().summary['RECOMMENDATION']:
-                relatorio.append(f"✅ {alvo['symbol']}")
-            time.sleep(1)
+            h = TA_Handler(symbol=alvo['symbol'], screener=alvo['screener'], exchange=alvo['exchange'], interval=Interval.INTERVAL_1_DAY)
+            if "STRONG" in h.get_analysis().summary['RECOMMENDATION']: achados.append(f"🔥 {alvo['symbol']}")
         except: pass
-    return relatorio, "Análise Hunter"
+    return achados
 
-def tarefa_hunter_background(chat_id=CHAT_ID):
-    # Essa função é chamada pela Thread
-    achados, humor = executar_hunter()
-    txt = f"📋 **HUNTER RAPIDO**\n\n" + ("\n".join(achados) if achados else "🚫 Nada em 'Compra Forte' na lista padrão.")
-    bot.send_message(chat_id, txt)
-
-def enviar_relatorio_agendado(): 
-    tarefa_hunter_background(CHAT_ID)
+def enviar_relatorio_agendado():
+    achados = executar_hunter()
+    bot.send_message(CHAT_ID, f"📋 **HUNTER:**\n" + ("\n".join(achados) if achados else "Nada relevante."))
 
 def thread_agendamento():
-    times = ["07:00", "10:15", "13:00", "16:00", "18:30"]
+    times = ["09:30", "13:00", "16:30"]
     for t in times: schedule.every().day.at(t).do(enviar_relatorio_agendado)
     while True: schedule.run_pending(); time.sleep(60)
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V38 (Correção Hunter)"
+def home(): return "QuantBot V40 (Gestão Full)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
