@@ -24,7 +24,8 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- MANTENHA SUA CHAVE ATUAL POR ENQUANTO ---
+# --- 🛑 AQUI VAI A CHAVE VITORIOSA! ---
+# Cole a chave que você testou no navegador e gerou o JSON.
 GEMINI_KEY = "AIzaSyA9HqUYO3G2_5o9l2fL3T44CmrGn6H-Dck"
 
 bot = telebot.TeleBot(TOKEN)
@@ -108,17 +109,15 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (CORREÇÃO DE MODELOS V34) 🛠️
+# 4. INTEGRAÇÃO IA (AJUSTADA PELO SEU JSON) 🎯
 # ==============================================================================
 def consultar_gemini(prompt):
-    # Usando APENAS nomes que apareceram no seu JSON ou apelidos oficiais
+    # Lista EXATA baseada no JSON que você me mandou
     modelos = [
-        "gemini-flash-latest",    # Tenta pegar a versão estável automaticamente
-        "gemini-2.0-flash",       # A versão moderna
-        "gemini-2.5-flash"        # A versão experimental (que vc tem acesso)
+        "gemini-2.5-flash",       # A joia da coroa (Topo da lista)
+        "gemini-2.0-flash",       # A versão estável
+        "gemini-2.0-flash-exp"    # Backup experimental
     ]
-    
-    erros = []
     
     for modelo in modelos:
         try:
@@ -131,14 +130,11 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # Loga o erro mas tenta o próximo
-                erros.append(f"{modelo}: {response.status_code}")
                 continue 
-        except Exception as e:
-            erros.append(f"{modelo}: {str(e)}")
+        except:
             continue
             
-    return f"❌ Erro IA ({', '.join(erros)}). Verifique o faturamento no Google Cloud."
+    return "❌ Erro IA: Verifique se você salvou a chave nova no código."
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -222,7 +218,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V34**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V35**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -292,7 +288,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V34 (Model Fix)"
+def home(): return "QuantBot V35 (Vitória)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
