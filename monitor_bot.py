@@ -24,8 +24,7 @@ TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
 CHAT_ID = "1116977306"
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- 🛑 AQUI ESTÁ O SEGREDO! ---
-# Cole a chave NOVA que você testou no navegador e deu certo.
+# --- MANTENHA SUA CHAVE ATUAL POR ENQUANTO ---
 GEMINI_KEY = "AIzaSyA9HqUYO3G2_5o9l2fL3T44CmrGn6H-Dck"
 
 bot = telebot.TeleBot(TOKEN)
@@ -109,14 +108,14 @@ def verificar_ultimo_status(ativo):
     return None
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (V33 - SIMPLIFICADA) ✨
+# 4. INTEGRAÇÃO IA (CORREÇÃO DE MODELOS V34) 🛠️
 # ==============================================================================
 def consultar_gemini(prompt):
-    # Lista otimizada para sua conta paga
+    # Usando APENAS nomes que apareceram no seu JSON ou apelidos oficiais
     modelos = [
-        "gemini-2.0-flash", 
-        "gemini-1.5-flash", 
-        "gemini-pro"
+        "gemini-flash-latest",    # Tenta pegar a versão estável automaticamente
+        "gemini-2.0-flash",       # A versão moderna
+        "gemini-2.5-flash"        # A versão experimental (que vc tem acesso)
     ]
     
     erros = []
@@ -132,13 +131,14 @@ def consultar_gemini(prompt):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
+                # Loga o erro mas tenta o próximo
                 erros.append(f"{modelo}: {response.status_code}")
                 continue 
         except Exception as e:
             erros.append(f"{modelo}: {str(e)}")
             continue
             
-    return f"❌ Erro IA: {', '.join(erros)}. Verifique se a chave no código é a mesma do Google Cloud."
+    return f"❌ Erro IA ({', '.join(erros)}). Verifique o faturamento no Google Cloud."
 
 # ==============================================================================
 # 5. ANÁLISE TÉCNICA
@@ -222,7 +222,7 @@ def thread_agendamento():
 def menu(m):
     kb = InlineKeyboardMarkup()
     kb.row(InlineKeyboardButton("🔫 Hunter", callback_data="CMD_HUNTER"), InlineKeyboardButton("📋 Lista", callback_data="CMD_LISTA"))
-    bot.reply_to(m, "🤖 **QuantBot V33**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
+    bot.reply_to(m, "🤖 **QuantBot V34**\nUse: /add, /del, /analisar", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
 def callback(c):
@@ -292,7 +292,7 @@ def loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V33 (Chave Renovada)"
+def home(): return "QuantBot V34 (Model Fix)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
