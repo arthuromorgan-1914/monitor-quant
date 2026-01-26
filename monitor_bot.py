@@ -18,21 +18,25 @@ import schedule
 import requests
 
 # ==============================================================================
-# 1. CONFIGURAÇÕES
+# 1. CONFIGURAÇÕES SEGURAS (DO RENDER) 🛡️
 # ==============================================================================
-TOKEN = "8487773967:AAGUMCgvgUKyPYRQFXzeReg-T5hzu6ohDJw"
-CHAT_ID = "1116977306"
+# O código busca as senhas nas Variáveis de Ambiente.
+# Se não achar (ex: rodando no seu PC sem config), dá erro.
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# --- 🛑 COLE SUA CHAVE NOVA AQUI ---
-GEMINI_KEY = "AIzaSyAeFpuANuD23TPbJO4l431bMjkOwCu8sRE"
+# Verifica se as chaves existem antes de iniciar
+if not TOKEN or not CHAT_ID or not GEMINI_KEY:
+    print("❌ ERRO CRÍTICO: Variáveis de Ambiente (TOKEN, CHAT_ID ou GEMINI) não configuradas!")
 
 bot = telebot.TeleBot(TOKEN)
 ultimo_sinal_enviado = {} 
 
 PADRAO_VIGILANCIA = ["PETR4.SA", "VALE3.SA", "BTC-USD", "ETH-USD"]
 
-# LISTA TOP 40 (O Robô vai varrer TUDO isso aqui)
 POOL_TOP_40 = [
     "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "PRIO3", "RENT3", 
     "GGBR4", "SUZB3", "BPAC11", "EQTL3", "RADL3", "RAIL3", "RDOR3", "CMIG4", 
@@ -100,6 +104,8 @@ def registrar_portfolio_real(ativo, tipo, preco):
 # 4. INTEGRAÇÃO IA
 # ==============================================================================
 def consultar_gemini(prompt):
+    if not GEMINI_KEY: return "❌ Erro: Chave Gemini não configurada no Render."
+
     modelos = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"]
     erros_log = []
     
@@ -119,18 +125,13 @@ def consultar_gemini(prompt):
             erros_log.append(f"{modelo}: {str(e)}")
             continue
             
-    return f"⚠️ FALHA IA: Verifique a chave na linha 35.\nErro: {erros_log[0] if erros_log else '?'}"
+    return f"⚠️ FALHA IA: Verifique Variáveis de Ambiente.\nErro: {erros_log[0] if erros_log else '?'}"
 
 # ==============================================================================
-# 5. SCANNER TOP 40 (O "ASPIRADOR" DE AÇÕES) 🌪️
+# 5. SCANNER TOP 40
 # ==============================================================================
 def escanear_mercado_top40(apenas_fortes=False):
-    """
-    Varre os 40 ativos do Pool.
-    Retorna uma lista de dicionários com Symbol, RSI e Tag.
-    """
     oportunidades = []
-    
     for simbolo in POOL_TOP_40:
         try:
             handler = TA_Handler(symbol=simbolo, screener="brazil", exchange="BMFBOVESPA", interval=Interval.INTERVAL_1_DAY)
@@ -155,20 +156,16 @@ def escanear_mercado_top40(apenas_fortes=False):
                     "rsi": rsi,
                     "symbol": simbolo
                 })
-            time.sleep(0.1) # Breve pausa para não travar
+            time.sleep(0.1)
         except: continue
-        
     return oportunidades
 
 def gerar_alocacao(valor):
-    # 1. SCANNER: Pega TUDO que é compra nos 40 ativos
     raw_ops = escanear_mercado_top40(apenas_fortes=False)
     
     if not raw_ops: 
-        return "⚠️ O Scanner varreu 40 ações e não achou tendências de alta claras hoje."
+        return "⚠️ O Scanner não achou tendências de alta claras hoje."
     
-    # 2. FILTRAGEM: Pega os Top 15 com melhor RSI (mais saudáveis)
-    # Isso garante que a IA olhe para uma gama grande, mas foque na qualidade
     top_15 = sorted(raw_ops, key=lambda x: x['rsi'], reverse=True)[:15]
     lista_para_ia = [x['texto'] for x in top_15]
     
@@ -179,11 +176,11 @@ def gerar_alocacao(valor):
     except: pass
 
     prompt = (
-        f"Atue como Consultor de Investimentos (Robo-Advisor). Cliente tem R$ {valor} para investir. "
-        f"Manchetes: {manchetes}. "
-        f"O Scanner filtrou estas 15 Oportunidades (Top 40 Ibovespa): {', '.join(lista_para_ia)}. "
+        f"Atue como Consultor de Investimentos (Robo-Advisor). Cliente tem R$ {valor}. "
+        f"Notícias: {manchetes}. "
+        f"Oportunidades (Top 40 Ibovespa): {', '.join(lista_para_ia)}. "
         f"TAREFA: "
-        f"1) Escolha 3 ou 4 ativos dessa lista para montar uma carteira diversificada. "
+        f"1) Escolha 3 ou 4 ativos diversos. "
         f"2) Distribua EXATAMENTE R$ {valor} entre eles. "
         f"3) Explique o racional. "
         f"Responda com lista e emojis."
@@ -219,7 +216,7 @@ def menu_principal(message):
     markup.row(InlineKeyboardButton("📂 Ver Portfólio", callback_data="CMD_PORTFOLIO"))
     
     txt = (
-        "🤖 **QuantBot V45**\n\n"
+        "🤖 **QuantBot V47 - Seguro**\n\n"
         "Comandos Manuais:\n"
         "`/comprar ATIVO PRECO`\n"
         "`/vender ATIVO PRECO`\n"
@@ -233,11 +230,8 @@ def analise(m):
         partes = m.text.split()
         if len(partes) < 2: return bot.reply_to(m, "Use: `/analisar ATIVO`")
         atv = partes[1].upper()
-        
-        # Feedback visual para o usuário
         bot.send_chat_action(m.chat.id, 'typing')
         bot.reply_to(m, f"🔍 Analisando **{atv}** com IA... aguarde.")
-        
         res = analisar_ativo_tecnico(atv)
         bot.reply_to(m, f"📊 **Análise {atv}**\n\n{res}", parse_mode="Markdown")
     except: pass
@@ -307,7 +301,7 @@ def passo_consultor_valor(message):
     except: bot.reply_to(message, "❌ Use números.")
 
 # ==============================================================================
-# 7. LOOP MONITORAMENTO (CARTEIRA PESSOAL)
+# 7. LOOP MONITORAMENTO
 # ==============================================================================
 def loop():
     while True:
@@ -345,7 +339,7 @@ def loop():
         except: time.sleep(60)
 
 # ==============================================================================
-# 8. HUNTER (FILTRADO PARA FORTES)
+# 8. HUNTER
 # ==============================================================================
 def executar_hunter_completo():
     sentimento = "Sem notícias."
@@ -358,7 +352,6 @@ def executar_hunter_completo():
             sentimento = consultar_gemini(prompt)
     except: pass
 
-    # Hunter só mostra STRONG_BUY para não poluir
     raw_ops = escanear_mercado_top40(apenas_fortes=True)
     achados = [x['texto'] for x in raw_ops]
     
@@ -366,8 +359,8 @@ def executar_hunter_completo():
 
 def enviar_relatorio_agendado():
     humor, achados = executar_hunter_completo()
-    txt_sinais = "\n".join(achados) if achados else "🚫 Sem 'Strong Buy' no momento."
-    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **OPORTUNIDADES FORTES:**\n{txt_sinais}"
+    txt_sinais = "\n".join(achados) if achados else "🚫 Sem sinais 'Forte' no momento."
+    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **TOP OPORTUNIDADES:**\n{txt_sinais}"
     bot.send_message(CHAT_ID, msg)
 
 def thread_agendamento():
@@ -377,7 +370,7 @@ def thread_agendamento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V45 (Chefão)"
+def home(): return "QuantBot V47 (Secure Env)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
