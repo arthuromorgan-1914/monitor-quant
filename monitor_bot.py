@@ -18,19 +18,16 @@ import schedule
 import requests
 
 # ==============================================================================
-# 1. CONFIGURAÇÕES SEGURAS (DO RENDER) 🛡️
+# 1. CONFIGURAÇÕES SEGURAS (DO RENDER)
 # ==============================================================================
-# O código busca as senhas nas Variáveis de Ambiente.
-# Se não achar (ex: rodando no seu PC sem config), dá erro.
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-# Verifica se as chaves existem antes de iniciar
 if not TOKEN or not CHAT_ID or not GEMINI_KEY:
-    print("❌ ERRO CRÍTICO: Variáveis de Ambiente (TOKEN, CHAT_ID ou GEMINI) não configuradas!")
+    print("❌ ERRO CRÍTICO: Chaves não configuradas no Environment do Render!")
 
 bot = telebot.TeleBot(TOKEN)
 ultimo_sinal_enviado = {} 
@@ -46,11 +43,26 @@ POOL_TOP_40 = [
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES AUXILIARES
+# 2. FUNÇÕES AUXILIARES (COM CORREÇÃO DE ESCALA) 🛠️
 # ==============================================================================
 def formatar_preco(valor):
     if valor < 50: return f"{valor:.4f}"
     return f"{valor:.2f}"
+
+def corrigir_escala(symbol, preco):
+    """
+    Corrige preços absurdos (erro de vírgula do Yahoo).
+    Se for > 10.000 e não for BTC, divide por 10.000.
+    """
+    symbol_upper = symbol.upper()
+    # Protege BTC e YHOO (Berkshire) que são legitimamente caros
+    if "BTC" in symbol_upper: return preco
+    
+    # Se passar de 10k, assume erro de escala (ex: BBDC4 207400 -> 20.74)
+    if preco > 10000:
+        return preco / 10000
+        
+    return preco
 
 def pegar_dados_yahoo(symbol):
     try:
@@ -105,7 +117,6 @@ def registrar_portfolio_real(ativo, tipo, preco):
 # ==============================================================================
 def consultar_gemini(prompt):
     if not GEMINI_KEY: return "❌ Erro: Chave Gemini não configurada no Render."
-
     modelos = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"]
     erros_log = []
     
@@ -162,9 +173,7 @@ def escanear_mercado_top40(apenas_fortes=False):
 
 def gerar_alocacao(valor):
     raw_ops = escanear_mercado_top40(apenas_fortes=False)
-    
-    if not raw_ops: 
-        return "⚠️ O Scanner não achou tendências de alta claras hoje."
+    if not raw_ops: return "⚠️ O Scanner não achou tendências de alta claras hoje."
     
     top_15 = sorted(raw_ops, key=lambda x: x['rsi'], reverse=True)[:15]
     lista_para_ia = [x['texto'] for x in top_15]
@@ -176,14 +185,13 @@ def gerar_alocacao(valor):
     except: pass
 
     prompt = (
-        f"Atue como Consultor de Investimentos (Robo-Advisor). Cliente tem R$ {valor}. "
+        f"Atue como Consultor (Robo-Advisor). Cliente tem R$ {valor}. "
         f"Notícias: {manchetes}. "
-        f"Oportunidades (Top 40 Ibovespa): {', '.join(lista_para_ia)}. "
+        f"Oportunidades: {', '.join(lista_para_ia)}. "
         f"TAREFA: "
         f"1) Escolha 3 ou 4 ativos diversos. "
-        f"2) Distribua EXATAMENTE R$ {valor} entre eles. "
-        f"3) Explique o racional. "
-        f"Responda com lista e emojis."
+        f"2) Distribua R$ {valor}. "
+        f"3) Explique. Responda com lista e emojis."
     )
     return consultar_gemini(prompt)
 
@@ -191,16 +199,24 @@ def analisar_ativo_tecnico(ativo):
     try:
         df = pegar_dados_yahoo(ativo)
         if df is None: return "Erro dados Yahoo."
+        
+        # APLICANDO A CORREÇÃO DE ESCALA AQUI TAMBÉM
+        preco_bruto = df['Close'].iloc[-1]
+        preco = corrigir_escala(ativo, preco_bruto)
+        
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+        # Correção nas médias também, caso estejam escaladas (raro, mas possível)
+        if sma9 > 10000 and "BTC" not in ativo.upper(): sma9 /= 10000
+        if sma21 > 10000 and "BTC" not in ativo.upper(): sma21 /= 10000
+        
         rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-        preco = df['Close'].iloc[-1]
         tendencia = "ALTA" if sma9 > sma21 else "BAIXA"
         
         prompt = (
             f"Analise {ativo}. Preço: {preco:.2f} | RSI: {rsi:.1f} | "
-            f"Médias 9/21: {sma9:.2f}/{sma21:.2f} ({tendencia}). "
-            "Dê um veredito técnico curto: Compra, Venda ou Neutro?"
+            f"M9/M21: {sma9:.2f}/{sma21:.2f} ({tendencia}). "
+            "Dê um veredito técnico curto."
         )
         return consultar_gemini(prompt)
     except Exception as e: return f"Erro: {str(e)}"
@@ -214,14 +230,7 @@ def menu_principal(message):
     markup.row(InlineKeyboardButton("📰 Hunter (Top Oportunidades)", callback_data="CMD_HUNTER"))
     markup.row(InlineKeyboardButton("🎩 Consultor (Alocação)", callback_data="CMD_CONSULTOR"))
     markup.row(InlineKeyboardButton("📂 Ver Portfólio", callback_data="CMD_PORTFOLIO"))
-    
-    txt = (
-        "🤖 **QuantBot V47 - Seguro**\n\n"
-        "Comandos Manuais:\n"
-        "`/comprar ATIVO PRECO`\n"
-        "`/vender ATIVO PRECO`\n"
-        "`/analisar ATIVO` (IA)"
-    )
+    txt = "🤖 **QuantBot V48 - Fix Escala**\n\nComandos:\n`/comprar ATIVO PRECO`\n`/vender ATIVO PRECO`\n`/analisar ATIVO`"
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
@@ -231,9 +240,9 @@ def analise(m):
         if len(partes) < 2: return bot.reply_to(m, "Use: `/analisar ATIVO`")
         atv = partes[1].upper()
         bot.send_chat_action(m.chat.id, 'typing')
-        bot.reply_to(m, f"🔍 Analisando **{atv}** com IA... aguarde.")
+        bot.reply_to(m, f"🔍 Analisando **{atv}**...")
         res = analisar_ativo_tecnico(atv)
-        bot.reply_to(m, f"📊 **Análise {atv}**\n\n{res}", parse_mode="Markdown")
+        bot.reply_to(m, f"📊 **{atv}**\n\n{res}", parse_mode="Markdown")
     except: pass
 
 @bot.message_handler(commands=['comprar'])
@@ -266,17 +275,14 @@ def callback(c):
             emoji = "✅" if tipo == "COMPRA" else "🔻"
             bot.send_message(c.message.chat.id, f"{emoji} {ativo} registrado!")
             bot.answer_callback_query(c.id, "Feito!")
-
     elif c.data.startswith("SUGEST|"):
         _, tipo, ativo, preco = c.data.split("|")
         registrar_sugestao(ativo, tipo, preco)
         bot.answer_callback_query(c.id, "Arquivado.")
         bot.edit_message_text(chat_id=c.message.chat.id, message_id=c.message.message_id, text=f"👀 Sugestão arquivada.")
-
     elif c.data == "CMD_CONSULTOR":
-        msg = bot.send_message(c.message.chat.id, "💰 Quanto investir? (Ex: 5000)", reply_markup=ForceReply())
+        msg = bot.send_message(c.message.chat.id, "💰 Quanto investir?", reply_markup=ForceReply())
         bot.register_next_step_handler(msg, passo_consultor_valor)
-    
     elif c.data == "CMD_PORTFOLIO":
         sh = conectar_google()
         try: 
@@ -284,18 +290,17 @@ def callback(c):
             txt = "📂 **Últimos Registros:**\n"
             for row in dados: txt += f"{row[1]} | {row[2]} | {row[3]}\n"
             bot.send_message(c.message.chat.id, txt, parse_mode="Markdown")
-        except: bot.send_message(c.message.chat.id, "Portfólio vazio.")
-
+        except: bot.send_message(c.message.chat.id, "Vazio.")
     elif c.data == "CMD_HUNTER":
-        bot.answer_callback_query(c.id, "Varrendo Top 40...")
-        bot.send_message(c.message.chat.id, "🔭 **Hunter:** Buscando oportunidades FORTES nos Top 40... (Aguarde ~40s)")
+        bot.answer_callback_query(c.id, "Varrendo...")
+        bot.send_message(c.message.chat.id, "🔭 **Hunter:** Buscando oportunidades... (~40s)")
         threading.Thread(target=enviar_relatorio_agendado).start()
 
 def passo_consultor_valor(message):
     try:
         valor = float(message.text.replace(",", ".").replace("R$", ""))
         bot.send_chat_action(message.chat.id, 'typing')
-        bot.reply_to(message, f"🤖 Analisando **Top 40** para alocar R$ {valor:.2f}...\n⏳ Aguarde ~45 segundos...")
+        bot.reply_to(message, f"🤖 Analisando **Top 40** para R$ {valor:.2f}...\n⏳ Aguarde...")
         sugestao = gerar_alocacao(valor)
         bot.reply_to(message, f"🎩 **Sugestão:**\n\n{sugestao}", parse_mode="Markdown")
     except: bot.reply_to(message, "❌ Use números.")
@@ -311,12 +316,23 @@ def loop():
                 try:
                     df = pegar_dados_yahoo(atv)
                     if df is None: continue
+                    
+                    # === APLICAÇÃO DA CORREÇÃO DE ESCALA AQUI ===
+                    preco_bruto = df['Close'].iloc[-1]
+                    preco = corrigir_escala(atv, preco_bruto)
+                    # ============================================
+
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
+                    
+                    # Correção das médias se necessário (para garantir o cruzamento correto)
+                    if sma9 > 10000 and "BTC" not in atv.upper(): sma9 /= 10000
+                    if sma21 > 10000 and "BTC" not in atv.upper(): sma21 /= 10000
+                    
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
+                    
                     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-                    preco = df['Close'].iloc[-1]
                     preco_str = formatar_preco(preco)
 
                     sinal = None
@@ -339,7 +355,7 @@ def loop():
         except: time.sleep(60)
 
 # ==============================================================================
-# 8. HUNTER
+# 8. HUNTER & AGENDAMENTO
 # ==============================================================================
 def executar_hunter_completo():
     sentimento = "Sem notícias."
@@ -354,13 +370,12 @@ def executar_hunter_completo():
 
     raw_ops = escanear_mercado_top40(apenas_fortes=True)
     achados = [x['texto'] for x in raw_ops]
-    
     return sentimento, achados
 
 def enviar_relatorio_agendado():
     humor, achados = executar_hunter_completo()
-    txt_sinais = "\n".join(achados) if achados else "🚫 Sem sinais 'Forte' no momento."
-    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **TOP OPORTUNIDADES:**\n{txt_sinais}"
+    txt_sinais = "\n".join(achados) if achados else "🚫 Sem sinais 'Forte'."
+    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **OPORTUNIDADES:**\n{txt_sinais}"
     bot.send_message(CHAT_ID, msg)
 
 def thread_agendamento():
@@ -370,7 +385,7 @@ def thread_agendamento():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "QuantBot V47 (Secure Env)"
+def home(): return "QuantBot V48 (Final Scale Fix)"
 
 if __name__ == "__main__":
     threading.Thread(target=loop).start()
