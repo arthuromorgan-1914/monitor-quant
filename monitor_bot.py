@@ -18,7 +18,7 @@ import schedule
 import requests
 
 # ==============================================================================
-# 1. CONFIGURAÇÕES SEGURAS (DO RENDER)
+# 1. CONFIGURAÇÕES (SEGURAS)
 # ==============================================================================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -26,10 +26,12 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-if not TOKEN or not CHAT_ID or not GEMINI_KEY:
-    print("❌ ERRO CRÍTICO: Chaves não configuradas no Environment do Render!")
+# Debug inicial no console do Render
+print("--- INICIANDO QUANTBOT V50 ---")
+if not TOKEN: print("ERRO: TOKEN não encontrado.")
+if not GEMINI_KEY: print("ERRO: GEMINI_KEY não encontrada.")
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN) if TOKEN else None
 ultimo_sinal_enviado = {} 
 
 PADRAO_VIGILANCIA = ["PETR4.SA", "VALE3.SA", "BTC-USD", "ETH-USD"]
@@ -43,33 +45,38 @@ POOL_TOP_40 = [
 ]
 
 # ==============================================================================
-# 2. FUNÇÕES AUXILIARES (COM CORREÇÃO DE ESCALA) 🛠️
+# 2. FUNÇÕES AUXILIARES
 # ==============================================================================
 def formatar_preco(valor):
     if valor < 50: return f"{valor:.4f}"
     return f"{valor:.2f}"
 
 def corrigir_escala(symbol, preco):
-    """
-    Corrige preços absurdos (erro de vírgula do Yahoo).
-    Se for > 10.000 e não for BTC, divide por 10.000.
-    """
     symbol_upper = symbol.upper()
-    # Protege BTC e YHOO (Berkshire) que são legitimamente caros
     if "BTC" in symbol_upper: return preco
-    
-    # Se passar de 10k, assume erro de escala (ex: BBDC4 207400 -> 20.74)
-    if preco > 10000:
-        return preco / 10000
-        
+    if preco > 10000: return preco / 10000
     return preco
+
+def normalizar_simbolo(entrada):
+    s = entrada.upper().strip()
+    if "." in s or "-" in s: return s
+    criptos = ["BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "AVAX", "DOT", "LINK", "SHIB"]
+    if s in criptos: return f"{s}-USD"
+    if s[-1] in ['3', '4', '5', '6', '1']: return f"{s}.SA"
+    return s
 
 def pegar_dados_yahoo(symbol):
     try:
-        df = yf.Ticker(symbol).history(period="1mo", interval="15m")
-        if df is None or df.empty: return None
+        symbol_corrigido = normalizar_simbolo(symbol)
+        # Tenta baixar
+        df = yf.Ticker(symbol_corrigido).history(period="1mo", interval="15m")
+        if df is None or df.empty: 
+            print(f"DEBUG: Yahoo retornou vazio para {symbol_corrigido}")
+            return None
         return df
-    except: return None
+    except Exception as e:
+        print(f"DEBUG: Erro Yahoo: {e}")
+        return None
 
 # ==============================================================================
 # 3. GOOGLE SHEETS
@@ -116,8 +123,10 @@ def registrar_portfolio_real(ativo, tipo, preco):
 # 4. INTEGRAÇÃO IA
 # ==============================================================================
 def consultar_gemini(prompt):
-    if not GEMINI_KEY: return "❌ Erro: Chave Gemini não configurada no Render."
-    modelos = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"]
+    if not GEMINI_KEY: return "❌ Erro: Chave Gemini ausente."
+
+    # Ordem: Tenta o 2.5 Flash primeiro, se falhar tenta o 2.0
+    modelos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     erros_log = []
     
     for modelo in modelos:
@@ -125,7 +134,9 @@ def consultar_gemini(prompt):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_KEY}"
             headers = {'Content-Type': 'application/json'}
             data = {"contents": [{"parts": [{"text": prompt}]}]}
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+            # Timeout curto para não travar o bot
+            response = requests.post(url, headers=headers, json=data, timeout=25)
             
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
@@ -136,7 +147,8 @@ def consultar_gemini(prompt):
             erros_log.append(f"{modelo}: {str(e)}")
             continue
             
-    return f"⚠️ FALHA IA: Verifique Variáveis de Ambiente.\nErro: {erros_log[0] if erros_log else '?'}"
+    print(f"DEBUG IA ERRO: {erros_log}")
+    return f"⚠️ IA Falhou. Erro técnico: {erros_log[0] if erros_log else 'Timeout'}"
 
 # ==============================================================================
 # 5. SCANNER TOP 40
@@ -151,7 +163,6 @@ def escanear_mercado_top40(apenas_fortes=False):
             
             should_add = False
             tag = ""
-            
             if "STRONG_BUY" in rec:
                 tag = "🔥"
                 should_add = True
@@ -197,40 +208,42 @@ def gerar_alocacao(valor):
 
 def analisar_ativo_tecnico(ativo):
     try:
-        df = pegar_dados_yahoo(ativo)
-        if df is None: return "Erro dados Yahoo."
+        symbol_corrigido = normalizar_simbolo(ativo)
+        df = pegar_dados_yahoo(symbol_corrigido)
         
-        # APLICANDO A CORREÇÃO DE ESCALA AQUI TAMBÉM
+        if df is None: return f"❌ Não encontrei dados para {symbol_corrigido}."
+        
         preco_bruto = df['Close'].iloc[-1]
-        preco = corrigir_escala(ativo, preco_bruto)
+        preco = corrigir_escala(symbol_corrigido, preco_bruto)
         
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
-        # Correção nas médias também, caso estejam escaladas (raro, mas possível)
-        if sma9 > 10000 and "BTC" not in ativo.upper(): sma9 /= 10000
-        if sma21 > 10000 and "BTC" not in ativo.upper(): sma21 /= 10000
+        
+        # Correção médias
+        if sma9 > 10000 and "BTC" not in symbol_corrigido: sma9 /= 10000
+        if sma21 > 10000 and "BTC" not in symbol_corrigido: sma21 /= 10000
         
         rsi = ta.rsi(df['Close'], length=14).iloc[-1]
         tendencia = "ALTA" if sma9 > sma21 else "BAIXA"
         
         prompt = (
-            f"Analise {ativo}. Preço: {preco:.2f} | RSI: {rsi:.1f} | "
+            f"Analise {symbol_corrigido}. Preço: {preco:.2f} | RSI: {rsi:.1f} | "
             f"M9/M21: {sma9:.2f}/{sma21:.2f} ({tendencia}). "
-            "Dê um veredito técnico curto."
+            "Dê um veredito técnico curto e direto."
         )
         return consultar_gemini(prompt)
-    except Exception as e: return f"Erro: {str(e)}"
+    except Exception as e: return f"Erro script: {str(e)}"
 
 # ==============================================================================
-# 6. TELEGRAM HANDLERS
+# 6. TELEGRAM HANDLERS (CORREÇÃO V50)
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📰 Hunter (Top Oportunidades)", callback_data="CMD_HUNTER"))
-    markup.row(InlineKeyboardButton("🎩 Consultor (Alocação)", callback_data="CMD_CONSULTOR"))
-    markup.row(InlineKeyboardButton("📂 Ver Portfólio", callback_data="CMD_PORTFOLIO"))
-    txt = "🤖 **QuantBot V48 - Fix Escala**\n\nComandos:\n`/comprar ATIVO PRECO`\n`/vender ATIVO PRECO`\n`/analisar ATIVO`"
+    markup.row(InlineKeyboardButton("📰 Hunter", callback_data="CMD_HUNTER"))
+    markup.row(InlineKeyboardButton("🎩 Consultor", callback_data="CMD_CONSULTOR"))
+    markup.row(InlineKeyboardButton("📂 Portfólio", callback_data="CMD_PORTFOLIO"))
+    txt = "🤖 **QuantBot V50 - Safe Mode**\n\n`/comprar ATIVO PRECO`\n`/vender ATIVO PRECO`\n`/analisar ATIVO`"
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
@@ -238,12 +251,23 @@ def analise(m):
     try:
         partes = m.text.split()
         if len(partes) < 2: return bot.reply_to(m, "Use: `/analisar ATIVO`")
-        atv = partes[1].upper()
+        
+        atv_digitado = partes[1].upper()
+        
+        # 1. Feedback Imediato
         bot.send_chat_action(m.chat.id, 'typing')
-        bot.reply_to(m, f"🔍 Analisando **{atv}**...")
-        res = analisar_ativo_tecnico(atv)
-        bot.reply_to(m, f"📊 **{atv}**\n\n{res}", parse_mode="Markdown")
-    except: pass
+        msg_wait = bot.reply_to(m, f"🔍 Analisando **{atv_digitado}**...", parse_mode="Markdown")
+        
+        # 2. Processamento
+        res = analisar_ativo_tecnico(atv_digitado)
+        
+        # 3. Resposta SEM Markdown (Para evitar o erro que trava o bot)
+        cabecalho = f"📊 ANÁLISE: {atv_digitado}\n\n"
+        bot.edit_message_text(chat_id=m.chat.id, message_id=msg_wait.message_id, text=cabecalho + res)
+        
+    except Exception as e:
+        print(f"DEBUG: Erro no handler analisar: {e}")
+        bot.reply_to(m, f"❌ Erro interno: {e}")
 
 @bot.message_handler(commands=['comprar'])
 def manual_buy(m):
@@ -302,7 +326,7 @@ def passo_consultor_valor(message):
         bot.send_chat_action(message.chat.id, 'typing')
         bot.reply_to(message, f"🤖 Analisando **Top 40** para R$ {valor:.2f}...\n⏳ Aguarde...")
         sugestao = gerar_alocacao(valor)
-        bot.reply_to(message, f"🎩 **Sugestão:**\n\n{sugestao}", parse_mode="Markdown")
+        bot.reply_to(message, f"🎩 **Sugestão:**\n\n{sugestao}") # Sem Markdown aqui tb por segurança
     except: bot.reply_to(message, "❌ Use números.")
 
 # ==============================================================================
@@ -317,17 +341,15 @@ def loop():
                     df = pegar_dados_yahoo(atv)
                     if df is None: continue
                     
-                    # === APLICAÇÃO DA CORREÇÃO DE ESCALA AQUI ===
                     preco_bruto = df['Close'].iloc[-1]
-                    preco = corrigir_escala(atv, preco_bruto)
-                    # ============================================
+                    atv_corr = normalizar_simbolo(atv)
+                    preco = corrigir_escala(atv_corr, preco_bruto)
 
                     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
                     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
                     
-                    # Correção das médias se necessário (para garantir o cruzamento correto)
-                    if sma9 > 10000 and "BTC" not in atv.upper(): sma9 /= 10000
-                    if sma21 > 10000 and "BTC" not in atv.upper(): sma21 /= 10000
+                    if sma9 > 10000 and "BTC" not in atv_corr: sma9 /= 10000
+                    if sma21 > 10000 and "BTC" not in atv_corr: sma21 /= 10000
                     
                     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
                     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
@@ -383,12 +405,13 @@ def thread_agendamento():
     for t in times: schedule.every().day.at(t).do(enviar_relatorio_agendado)
     while True: schedule.run_pending(); time.sleep(60)
 
-app = Flask(__name__)
-@app.route('/')
-def home(): return "QuantBot V48 (Final Scale Fix)"
+if TOKEN:
+    app = Flask(__name__)
+    @app.route('/')
+    def home(): return "QuantBot V50 (SafeText)"
 
-if __name__ == "__main__":
-    threading.Thread(target=loop).start()
-    threading.Thread(target=thread_agendamento).start()
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
-    bot.infinity_polling()
+    if __name__ == "__main__":
+        threading.Thread(target=loop).start()
+        threading.Thread(target=thread_agendamento).start()
+        threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
+        bot.infinity_polling()
