@@ -26,7 +26,7 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-print("--- INICIANDO QUANTBOT V55 (WATCHLIST MAKER) ---")
+print("--- INICIANDO QUANTBOT V56 (APPLE LINK FIX) ---")
 if not TOKEN: print("ERRO: TOKEN não encontrado.")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -65,8 +65,13 @@ def normalizar_simbolo(entrada):
     if s in criptos: return f"{s}-USD"
     return f"{s}.SA"
 
+# === CORREÇÃO V56: LINK UNIVERSAL ===
 def gerar_link_apple(ativo):
-    return f"stocks://?symbol={ativo}"
+    """
+    Usa o link HTTPS da Apple que redireciona para o app.
+    O Telegram aceita HTTPS.
+    """
+    return f"https://stocks.apple.com/symbol/{ativo}"
 
 def pegar_dados_yahoo(symbol, verificar_volume=False):
     try:
@@ -233,34 +238,30 @@ def analisar_ativo_tecnico(ativo):
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📰 Hunter B3", callback_data="CMD_HUNTER"))
-    markup.row(InlineKeyboardButton("🍏 App Watchlist", callback_data="CMD_MERCADO_APPLE")) # Atalho novo
+    markup.row(InlineKeyboardButton("🍏 App Watchlist", callback_data="CMD_MERCADO_APPLE"))
     markup.row(InlineKeyboardButton("🎩 Consultor", callback_data="CMD_CONSULTOR"))
     markup.row(InlineKeyboardButton("📂 Portfólio", callback_data="CMD_PORTFOLIO"))
-    txt = "🤖 **QuantBot V55**\n\n`/mercado` -> Lista p/ adicionar no iOS.\n`/analisar ATIVO`"
+    txt = "🤖 **QuantBot V56**\n\n`/mercado` -> Lista p/ App Bolsa.\n`/analisar ATIVO`"
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
-# === NOVO COMANDO /mercado ===
 @bot.message_handler(commands=['mercado'])
 def comando_mercado(m):
     bot.send_chat_action(m.chat.id, 'typing')
-    bot.reply_to(m, "🔎 Varrendo a Bolsa para montar sua Watchlist... aguarde.")
+    bot.reply_to(m, "🔎 Buscando Top Oportunidades para o app Bolsa...")
     
-    # Busca apenas os FORTES (Strong Buy)
     ops = escanear_mercado_b3(apenas_fortes=True)
-    
     if not ops:
-        bot.reply_to(m, "🤷‍♂️ Mercado morno. Nenhuma 'Strong Buy' agora.")
+        bot.reply_to(m, "🤷‍♂️ Nenhuma 'Strong Buy' agora.")
         return
 
-    # Pega os Top 8 (para não encher demais a tela)
     top_ops = sorted(ops, key=lambda x: x['rsi'], reverse=True)[:8]
     
     markup = InlineKeyboardMarkup()
-    # Cria botões em pares (2 por linha)
     row = []
     for item in top_ops:
-        sym = item['symbol'] # Ex: PETR4
-        sym_apple = f"{sym}.SA" # Formato Apple
+        sym = item['symbol']
+        sym_apple = f"{sym}.SA"
+        # CORREÇÃO AQUI: Link HTTPS
         link = gerar_link_apple(sym_apple)
         btn = InlineKeyboardButton(f" {sym}", url=link)
         row.append(btn)
@@ -269,9 +270,9 @@ def comando_mercado(m):
             markup.row(row[0], row[1])
             row = []
             
-    if row: markup.row(row[0]) # Adiciona o que sobrou
+    if row: markup.row(row[0])
     
-    txt = "📋 **Top Oportunidades B3 (Watchlist Maker)**\n\nClique para abrir no app Bolsa e adicionar:"
+    txt = "📋 **Top Oportunidades B3 (Watchlist Maker)**\nClique para abrir no app Bolsa:"
     bot.send_message(m.chat.id, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
@@ -317,7 +318,7 @@ def callback(c):
         bot.register_next_step_handler(msg, passo_consultor_valor)
         
     elif c.data == "CMD_MERCADO_APPLE":
-        comando_mercado(c.message) # Chama a função do comando /mercado
+        comando_mercado(c.message)
         
     elif c.data == "CMD_PORTFOLIO":
         sh = conectar_google()
@@ -410,7 +411,7 @@ def thread_agendamento():
 if TOKEN:
     app = Flask(__name__)
     @app.route('/')
-    def home(): return "QuantBot V55 (Watchlist)"
+    def home(): return "QuantBot V56 (Fixed Apple Link)"
     if __name__ == "__main__":
         threading.Thread(target=loop).start()
         threading.Thread(target=thread_agendamento).start()
