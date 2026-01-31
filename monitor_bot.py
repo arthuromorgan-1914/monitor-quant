@@ -26,14 +26,12 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-print("--- INICIANDO QUANTBOT V52 (IA JUDGE + VOLUME) ---")
+print("--- INICIANDO QUANTBOT V54 (APPLE STOCKS) ---")
 if not TOKEN: print("ERRO: TOKEN não encontrado.")
 if not GEMINI_KEY: print("ERRO: GEMINI_KEY não encontrada.")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 ultimo_sinal_enviado = {} 
-
-# Mínimo de Volume Financeiro para operar (R$ 5 Milhões)
 VOLUME_MINIMO_BRL = 5_000_000 
 
 PADRAO_VIGILANCIA = ["PETR4.SA", "VALE3.SA", "ITUB4.SA", "WEGE3.SA", "PRIO3.SA"]
@@ -68,18 +66,23 @@ def normalizar_simbolo(entrada):
     if s in criptos: return f"{s}-USD"
     return f"{s}.SA"
 
+# === NOVA FUNÇÃO APPLE STOCKS ===
+def gerar_link_apple(ativo):
+    """
+    Gera o Deep Link para abrir o app Bolsa no iOS/Mac.
+    O formato é stocks://?symbol=TICKER
+    """
+    return f"stocks://?symbol={ativo}"
+
 def pegar_dados_yahoo(symbol, verificar_volume=False):
     try:
         symbol_corrigido = normalizar_simbolo(symbol)
         df = yf.Ticker(symbol_corrigido).history(period="1mo", interval="15m")
         if df is None or df.empty: return None
         
-        # FILTRO DE VOLUME (Ideia 2)
         if verificar_volume:
-            # Volume Financeiro Aproximado (Preço x Volume)
             vol_financeiro = df['Volume'].iloc[-1] * df['Close'].iloc[-1]
             if vol_financeiro < VOLUME_MINIMO_BRL:
-                # Se for muito baixo, ignora (retorna None)
                 return None
                 
         return df
@@ -145,12 +148,7 @@ def consultar_gemini(prompt):
         except: continue
     return "TIMEOUT IA"
 
-# === NOVA FUNÇÃO: JUIZ DE SINAIS ===
 def validar_sinal_com_ia(ativo, sinal, df):
-    """
-    Ideia 1: Camada de IA na análise.
-    Recebe os dados técnicos e pergunta se a IA valida a entrada.
-    """
     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
@@ -163,7 +161,7 @@ def validar_sinal_com_ia(ativo, sinal, df):
         f"Atue como Trader Sênior. Estou analisando {ativo} no gráfico de 15min. "
         f"Setup Técnico detectou: {contexto}. "
         f"Dados Atuais: Preço={preco:.2f}, RSI={rsi:.1f}, Volume={vol}, MM9={sma9:.2f}, MM21={sma21:.2f}. "
-        f"PERGUNTA: Com base APENAS nestes números, esse sinal parece confiável ou é uma armadilha (ex: RSI extremo, sem volume)? "
+        f"PERGUNTA: Com base APENAS nestes números, esse sinal parece confiável ou é uma armadilha? "
         f"Responda EXATAMENTE neste formato: "
         f"'VEREDITO: APROVADO' ou 'VEREDITO: REPROVADO'. Em seguida, uma frase curta explicando."
     )
@@ -171,13 +169,13 @@ def validar_sinal_com_ia(ativo, sinal, df):
     resposta = consultar_gemini(prompt)
     
     if "APROVADO" in resposta.upper():
-        motivo = resposta.split("APROVADO")[-1].strip().replace(".", "")[:50] # Pega explicação curta
+        motivo = resposta.split("APROVADO")[-1].strip().replace(".", "")[:50]
         return True, motivo
     else:
         return False, "IA Reprovou (Risco Técnico)"
 
 # ==============================================================================
-# 5. SCANNER DE MERCADO (COM FILTRO DE VOLUME)
+# 5. SCANNER DE MERCADO
 # ==============================================================================
 def escanear_mercado_b3(apenas_fortes=False):
     oportunidades = []
@@ -199,8 +197,6 @@ def escanear_mercado_b3(apenas_fortes=False):
                 should_add = True
             
             if should_add:
-                # Só adiciona se tiver volume (validação simples via TradingView handler)
-                # O handler não dá volume financeiro direto fácil, mas assumimos que B3 top 60 tem.
                 rsi = analise.indicators.get("RSI", 50)
                 fechamento = analise.indicators.get("close", 0)
                 oportunidades.append({
@@ -228,9 +224,9 @@ def gerar_alocacao(valor):
 def analisar_ativo_tecnico(ativo):
     try:
         symbol_corrigido = normalizar_simbolo(ativo)
-        df = pegar_dados_yahoo(symbol_corrigido, verificar_volume=True) # Verifica volume aqui
+        df = pegar_dados_yahoo(symbol_corrigido, verificar_volume=True)
         
-        if df is None: return f"❌ {ativo}: Volume muito baixo (< R$ 5M) ou dados indisponíveis."
+        if df is None: return f"❌ {ativo}: Volume baixo ou dados indisponíveis."
         
         preco_bruto = df['Close'].iloc[-1]
         preco = corrigir_escala(symbol_corrigido, preco_bruto)
@@ -246,7 +242,7 @@ def analisar_ativo_tecnico(ativo):
         prompt = (
             f"Analise {symbol_corrigido}. Preço: {preco:.2f} | RSI: {rsi:.1f} | "
             f"M9/M21: {sma9:.2f}/{sma21:.2f} ({tendencia}). "
-            "Volume Financeiro OK (>5M). Dê veredito: Compra/Venda?"
+            "Dê veredito: Compra/Venda?"
         )
         return consultar_gemini(prompt)
     except Exception as e: return f"Erro: {str(e)}"
@@ -260,7 +256,7 @@ def menu_principal(message):
     markup.row(InlineKeyboardButton("📰 Hunter B3", callback_data="CMD_HUNTER"))
     markup.row(InlineKeyboardButton("🎩 Consultor B3", callback_data="CMD_CONSULTOR"))
     markup.row(InlineKeyboardButton("📂 Portfólio", callback_data="CMD_PORTFOLIO"))
-    txt = "🤖 **QuantBot V52 - AI Judge**\n\n✅ Filtro de Volume (>5M)\n✅ Validação de Sinais por IA\n\n`/analisar ATIVO`"
+    txt = "🤖 **QuantBot V54 - Apple Ready**\n\nAgora compatível com app Bolsa (iPad/iPhone).\n\n`/analisar ATIVO`"
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
@@ -269,10 +265,8 @@ def analise(m):
         partes = m.text.split()
         if len(partes) < 2: return bot.reply_to(m, "Use: `/analisar ATIVO`")
         atv_digitado = partes[1].upper()
-        
         bot.send_chat_action(m.chat.id, 'typing')
-        msg_wait = bot.reply_to(m, f"🔍 Analisando **{atv_digitado}** (Checando Volume + IA)...", parse_mode="Markdown")
-        
+        msg_wait = bot.reply_to(m, f"🔍 Analisando **{atv_digitado}**...", parse_mode="Markdown")
         res = analisar_ativo_tecnico(atv_digitado)
         bot.edit_message_text(chat_id=m.chat.id, message_id=msg_wait.message_id, text=f"📊 **Análise {atv_digitado}**\n\n{res}")
     except Exception as e: bot.reply_to(m, f"❌ Erro: {e}")
@@ -325,7 +319,7 @@ def callback(c):
         except: bot.send_message(c.message.chat.id, "Vazio.")
     elif c.data == "CMD_HUNTER":
         bot.answer_callback_query(c.id, "Varrendo...")
-        bot.send_message(c.message.chat.id, "🔭 **Hunter B3:** Analisando oportunidades líquidas... (~50s)")
+        bot.send_message(c.message.chat.id, "🔭 **Hunter B3:** Analisando oportunidades... (~50s)")
         threading.Thread(target=enviar_relatorio_agendado).start()
 
 def passo_consultor_valor(message):
@@ -338,7 +332,7 @@ def passo_consultor_valor(message):
     except: bot.reply_to(message, "❌ Use números.")
 
 # ==============================================================================
-# 7. LOOP MONITORAMENTO (COM JUIZ IA) ⚖️
+# 7. LOOP MONITORAMENTO
 # ==============================================================================
 def loop():
     while True:
@@ -346,9 +340,8 @@ def loop():
             lista_vigilancia = ler_carteira_vigilancia()
             for atv in lista_vigilancia:
                 try:
-                    # Agora verifica volume também (Ideia 2)
                     df = pegar_dados_yahoo(atv, verificar_volume=True)
-                    if df is None: continue # Sem volume ou dados, pula
+                    if df is None: continue
                     
                     preco_bruto = df['Close'].iloc[-1]
                     atv_corr = normalizar_simbolo(atv)
@@ -372,26 +365,26 @@ def loop():
                     if sinal_preliminar:
                         chave = f"{atv}_{sinal_preliminar}_{datetime.now().day}_{datetime.now().hour}"
                         if chave not in ultimo_sinal_enviado:
-                            
-                            # --- AQUI ENTRA O JUIZ IA (Ideia 1) ---
-                            # Só manda se a IA aprovar
                             aprovado, explicacao = validar_sinal_com_ia(atv_corr, sinal_preliminar, df)
                             
                             if aprovado:
                                 markup = InlineKeyboardMarkup()
                                 emoji = "🟢" if sinal_preliminar == "COMPRA" else "🔴"
                                 cb_real = f"REAL|{sinal_preliminar}|{atv}|{preco_str}"
-                                markup.add(InlineKeyboardButton(f"✅ Executar Real", callback_data=cb_real),
-                                         InlineKeyboardButton(f"👀 Ciente", callback_data=f"SUGEST|{sinal_preliminar}|{atv}|{preco_str}"))
                                 
-                                # Adiciona a explicação da IA na mensagem
+                                # === LINK PARA O APP BOLSA ===
+                                link_url = gerar_link_apple(atv_corr)
+                                btn_link = InlineKeyboardButton(" Abrir no App", url=link_url)
+                                
+                                markup.add(InlineKeyboardButton(f"✅ Executar Real", callback_data=cb_real))
+                                markup.add(btn_link) 
+                                markup.add(InlineKeyboardButton(f"👀 Ciente", callback_data=f"SUGEST|{sinal_preliminar}|{atv}|{preco_str}"))
+                                
                                 msg = f"{emoji} **SINAL {sinal_preliminar}**: {atv}\nPreço: {preco_str}\n\n🧠 **IA Diz:** {explicacao}"
                                 bot.send_message(CHAT_ID, msg, reply_markup=markup)
                                 ultimo_sinal_enviado[chave] = True
                             else:
-                                print(f"🚫 IA Vetou sinal em {atv}: {explicacao}")
-                                # Opcional: Avisar veto? Por enquanto só ignora pra não fazer spam.
-                                ultimo_sinal_enviado[chave] = True # Marca como "visto" pra não ficar tentando toda hora
+                                ultimo_sinal_enviado[chave] = True 
 
                     time.sleep(1)
                 except: pass
@@ -399,7 +392,7 @@ def loop():
         except: time.sleep(60)
 
 # ==============================================================================
-# 8. HUNTER
+# 8. HUNTER & AGENDAMENTO
 # ==============================================================================
 def executar_hunter_completo():
     sentimento = "Sem notícias."
@@ -417,7 +410,7 @@ def executar_hunter_completo():
 def enviar_relatorio_agendado():
     humor, achados = executar_hunter_completo()
     txt_sinais = "\n".join(achados) if achados else "🚫 Sem sinais fortes."
-    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **TOP OPORTUNIDADES:**\n{txt_sinais}"
+    msg = f"🗞️ **MERCADO:**\n{humor}\n\n🔥 **OPORTUNIDADES:**\n{txt_sinais}"
     bot.send_message(CHAT_ID, msg)
 
 def thread_agendamento():
@@ -428,7 +421,7 @@ def thread_agendamento():
 if TOKEN:
     app = Flask(__name__)
     @app.route('/')
-    def home(): return "QuantBot V52 (IA Judge + Vol)"
+    def home(): return "QuantBot V54 (Apple)"
 
     if __name__ == "__main__":
         threading.Thread(target=loop).start()
