@@ -26,57 +26,81 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-print("--- INICIANDO QUANTBOT V57 (DUAL BRAIN: B3 & CRYPTO) ---")
+print("--- INICIANDO QUANTBOT V58 (BDR AUTO-FIX) ---")
 if not TOKEN: print("ERRO: TOKEN não encontrado.")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 ultimo_sinal_enviado = {} 
 VOLUME_MINIMO_BRL = 5_000_000 
 
-# LISTAS SEPARADAS
+# LISTAS (Adicionei BDRs ao Pool da B3)
 POOL_CRYPTO = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "XRP-USD", "LINK-USD", "AVAX-USD", "DOT-USD"]
 
 POOL_B3 = [
     "PETR4.SA", "VALE3.SA", "PRIO3.SA", "ITUB4.SA", "WEGE3.SA", "BBAS3.SA",
     "GGBR4.SA", "CSAN3.SA", "BBDC4.SA", "BPAC11.SA", "RENT3.SA", "LREN3.SA",
     "HAPV3.SA", "RADL3.SA", "SUZB3.SA", "ELET3.SA", "EQTL3.SA", "SBSP3.SA",
-    "VBBR3.SA", "RAIL3.SA", "CMIG4.SA", "TIMS3.SA", "VIVT3.SA", "JBSS3.SA"
+    "VBBR3.SA", "RAIL3.SA", "CMIG4.SA", "TIMS3.SA", "VIVT3.SA", "JBSS3.SA",
+    # BDRs Populares (Agora monitorados também)
+    "AAPL34.SA", "NVDC34.SA", "MSFT34.SA", "TSLA34.SA", "AMZO34.SA", "GOGL34.SA"
 ]
 
-# COMBINA TUDO PARA O VIGIA
-POOL_TOTAL = POOL_B3 + POOL_CRYPTO
-
 # ==============================================================================
-# 2. FUNÇÕES AUXILIARES
+# 2. FUNÇÕES AUXILIARES (COM TRADUTOR DE BDR)
 # ==============================================================================
 def formatar_preco(valor):
     if valor < 50: return f"{valor:.4f}"
     return f"{valor:.2f}"
 
 def corrigir_escala(symbol, preco):
-    if "USD" in symbol: return preco # Cripto em Dólar não corrige
+    if "USD" in symbol: return preco 
     if preco > 10000: return preco / 10000
     return preco
 
 def normalizar_simbolo(entrada):
+    """
+    Inteligência para corrigir Tickers errados e converter EUA -> BDR.
+    """
     s = entrada.upper().strip()
+    
+    # === MAPA DE TRADUÇÃO BDR (O Pulo do Gato) ===
+    mapa_bdr = {
+        "AAPL": "AAPL34.SA",    "APPLE": "AAPL34.SA",
+        "NVDA": "NVDC34.SA",    "NVIDIA": "NVDC34.SA",
+        "MSFT": "MSFT34.SA",    "MICROSOFT": "MSFT34.SA",
+        "TSLA": "TSLA34.SA",    "TESLA": "TSLA34.SA",
+        "AMZN": "AMZO34.SA",    "AMAZON": "AMZO34.SA",
+        "GOOGL": "GOGL34.SA",   "GOOGLE": "GOGL34.SA",
+        "META": "M1TA34.SA",    "FACEBOOK": "M1TA34.SA",
+        "NFLX": "NFLX34.SA",    "NETFLIX": "NFLX34.SA"
+    }
+    
+    # 1. Verifica se está no mapa de tradução
+    if s in mapa_bdr: return mapa_bdr[s]
+    
+    # 2. Se já tem sufixo correto
     if "." in s or "-" in s: return s 
-    # Detecção simples
+    
+    # 3. Detecção Cripto
     if s in [x.split("-")[0] for x in POOL_CRYPTO]: return f"{s}-USD"
+    
+    # 4. Padrão B3 (Ações terminam em número)
     if len(s) <= 6 and s[-1].isdigit(): return f"{s}.SA"
-    return s
+    
+    # 5. Padrão B3 Genérico (Se não cair nas anteriores, tenta .SA)
+    return f"{s}.SA"
 
 def gerar_link_apple(ativo):
-    # Apple Stocks usa tickers limpos para cripto as vezes, mas aceita BTC-USD
     return f"https://stocks.apple.com/symbol/{ativo}"
 
 def pegar_dados_yahoo(symbol, verificar_volume=False):
     try:
         symbol_corrigido = normalizar_simbolo(symbol)
         df = yf.Ticker(symbol_corrigido).history(period="1mo", interval="15m")
-        if df is None or df.empty: return None
+        if df is None or df.empty: 
+            print(f"⚠️ Yahoo vazio para: {symbol_corrigido} (Original: {symbol})")
+            return None
         
-        # Volume só valida para B3
         if verificar_volume and "USD" not in symbol_corrigido:
             vol_financeiro = df['Volume'].iloc[-1] * df['Close'].iloc[-1]
             if vol_financeiro < VOLUME_MINIMO_BRL:
@@ -100,7 +124,7 @@ def ler_carteira_vigilancia():
     sh = conectar_google()
     if sh:
         try: return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
-        except: return POOL_B3[:5] # Default fallback
+        except: return POOL_B3[:5]
     return POOL_B3[:5]
 
 def registrar_sugestao(ativo, sinal, preco):
@@ -128,7 +152,7 @@ def registrar_portfolio_real(ativo, tipo, preco):
     return False
 
 # ==============================================================================
-# 4. INTEGRAÇÃO IA (JUIZ HÍBRIDO)
+# 4. INTEGRAÇÃO IA
 # ==============================================================================
 def consultar_gemini(prompt):
     if not GEMINI_KEY: return "❌ Erro: Chave Gemini ausente."
@@ -148,27 +172,23 @@ def validar_sinal_com_ia(ativo, sinal, df, tipo_ativo="B3"):
     preco = df['Close'].iloc[-1]
     
     if tipo_ativo == "CRYPTO":
-        # Lógica Cripto para IA
         supertrend = df['SUPERT_7_3.0'].iloc[-1] if 'SUPERT_7_3.0' in df.columns else 0
         stoch_k = df['STOCHk_14_3_3'].iloc[-1] if 'STOCHk_14_3_3' in df.columns else 50
         prompt = (
-            f"Atue como Crypto Trader Sênior. Analise {ativo} (15min). "
-            f"Sinal Técnico: {sinal} (Supertrend + StochRSI). "
-            f"Dados: Preço=${preco:.2f}, StochK={stoch_k:.1f}, Supertrend={supertrend:.2f}. "
-            f"O mercado cripto está volátil. Esse sinal parece um 'fakeout' ou movimento real? "
-            f"Responda EXATAMENTE: 'VEREDITO: APROVADO' ou 'VEREDITO: REPROVADO'. E explicação curta."
+            f"Atue como Crypto Trader. Analise {ativo} (15min). "
+            f"Sinal: {sinal} (Supertrend + StochRSI). "
+            f"Dados: Preço=${preco:.2f}, StochK={stoch_k:.1f}. "
+            f"Veredito: 'APROVADO' ou 'REPROVADO'? Explique."
         )
     else:
-        # Lógica B3 para IA
         sma9 = ta.sma(df['Close'], length=9).iloc[-1]
         sma21 = ta.sma(df['Close'], length=21).iloc[-1]
         rsi = ta.rsi(df['Close'], length=14).iloc[-1]
         vol = df['Volume'].iloc[-1]
-        contexto = "Cruzamento de Alta (9>21)" if sinal == "COMPRA" else "Cruzamento de Baixa (9<21)"
         prompt = (
-            f"Atue como B3 Trader. Analise {ativo} (15min). "
-            f"Setup: {contexto}. Preço=R${preco:.2f}, RSI={rsi:.1f}, Volume={vol}, MM9={sma9:.2f}. "
-            f"Responda EXATAMENTE: 'VEREDITO: APROVADO' ou 'VEREDITO: REPROVADO'. E explicação curta."
+            f"Atue como Trader B3. Analise {ativo} (15min). "
+            f"Sinal: {sinal} (MM9x21). Preço=R${preco:.2f}, RSI={rsi:.1f}, Volume={vol}. "
+            f"Veredito: 'APROVADO' ou 'REPROVADO'? Explique."
         )
 
     resposta = consultar_gemini(prompt)
@@ -179,18 +199,14 @@ def validar_sinal_com_ia(ativo, sinal, df, tipo_ativo="B3"):
         return False, "IA Reprovou (Risco)"
 
 # ==============================================================================
-# 5. ESTRATÉGIAS TÉCNICAS (DOIS CÉREBROS) 🧠🧠
+# 5. ESTRATÉGIAS
 # ==============================================================================
-
 def estrategia_b3(df):
-    """Estratégia Clássica: MM9 + MM21 + RSI"""
     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
     sma21 = ta.sma(df['Close'], length=21).iloc[-1]
     sma9_prev = ta.sma(df['Close'], length=9).iloc[-2]
     sma21_prev = ta.sma(df['Close'], length=21).iloc[-2]
     rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-    
-    # Ajuste de escala para B3 se necessário
     if sma9 > 10000: sma9 /= 10000
     if sma21 > 10000: sma21 /= 10000
 
@@ -199,29 +215,22 @@ def estrategia_b3(df):
     return None
 
 def estrategia_crypto(df):
-    """Estratégia Nova: Supertrend + Stochastic RSI"""
-    # Calcula Supertrend (Trend Following)
     supertrend = df.ta.supertrend(length=10, multiplier=3)
-    # O Pandas TA retorna 3 colunas, precisamos da coluna de direção (1=Alta, -1=Baixa) geralmente chamada de SUPERTd_...
+    if supertrend is None: return None
     st_dir_col = [c for c in supertrend.columns if "d_" in c][0]
     direction = supertrend[st_dir_col].iloc[-1]
     
-    # Calcula Stochastic RSI (Timing)
     stoch = df.ta.stoch(k=14, d=3, smooth_k=3)
+    if stoch is None: return None
     k_col = [c for c in stoch.columns if "STOCHk" in c][0]
     k_val = stoch[k_col].iloc[-1]
     
-    # Lógica de Entrada
-    # Compra se: Supertrend é Verde (1) E Stoch está Barato (< 20) (Dip buying)
     if direction == 1 and k_val < 20: return "COMPRA"
-    
-    # Venda se: Supertrend virou Vermelho (-1) (Trend Reversal)
     elif direction == -1: return "VENDA"
-    
     return None
 
 # ==============================================================================
-# 6. FUNÇÕES DE SCANNER E ALOCAÇÃO
+# 6. SCANNER E ALOCAÇÃO
 # ==============================================================================
 def escanear_mercado_b3(apenas_fortes=False):
     oportunidades = []
@@ -260,7 +269,7 @@ def analisar_ativo_tecnico(ativo):
         is_crypto = "USD" in symbol_corrigido
         
         df = pegar_dados_yahoo(symbol_corrigido, verificar_volume=not is_crypto)
-        if df is None: return "❌ Sem dados."
+        if df is None: return f"❌ Erro ao baixar dados de {symbol_corrigido}. Verifique o ticker."
         
         if is_crypto:
             sinal = estrategia_crypto(df)
@@ -275,7 +284,7 @@ def analisar_ativo_tecnico(ativo):
     except Exception as e: return f"Erro: {str(e)}"
 
 # ==============================================================================
-# 7. TELEGRAM HANDLERS
+# 7. TELEGRAM
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
@@ -284,13 +293,13 @@ def menu_principal(message):
     markup.row(InlineKeyboardButton("🍏 Watchlist", callback_data="CMD_MERCADO_APPLE"))
     markup.row(InlineKeyboardButton("🎩 Consultor", callback_data="CMD_CONSULTOR"))
     markup.row(InlineKeyboardButton("📂 Portfólio", callback_data="CMD_PORTFOLIO"))
-    txt = "🤖 **QuantBot V57 - Dual Brain**\n\n🦁 **B3:** Médias + Vol\n🚀 **Cripto:** Supertrend + Stoch\n\n`/analisar ATIVO`"
+    txt = "🤖 **QuantBot V58 - BDR Fix**\n\nAgora entendo 'AAPL' como 'AAPL34.SA'.\n\n`/analisar ATIVO`"
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['mercado'])
 def comando_mercado(m):
     bot.send_chat_action(m.chat.id, 'typing')
-    bot.reply_to(m, "🔎 Varrendo B3...")
+    bot.reply_to(m, "🔎 Varrendo B3 + BDRs...")
     ops = escanear_mercado_b3(apenas_fortes=True)
     if not ops:
         bot.reply_to(m, "🤷‍♂️ Nada forte agora.")
@@ -300,13 +309,15 @@ def comando_mercado(m):
     row = []
     for item in top_ops:
         sym = item['symbol']
+        # Corrige BDRs para o link da Apple funcionar
+        # Apple as vezes prefere AAPL ao invés de AAPL34.SA, mas vamos testar com o .SA
         link = gerar_link_apple(f"{sym}.SA")
         row.append(InlineKeyboardButton(f" {sym}", url=link))
         if len(row) == 2:
             markup.row(row[0], row[1])
             row = []
     if row: markup.row(row[0])
-    bot.send_message(m.chat.id, "📋 **Top B3 (Adicionar no App):**", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(m.chat.id, "📋 **Top Oportunidades:**", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
 def analise(m):
@@ -369,25 +380,24 @@ def passo_consultor_valor(message):
     except: pass
 
 # ==============================================================================
-# 8. LOOP PRINCIPAL (ROTEAMENTO INTELIGENTE)
+# 8. LOOP
 # ==============================================================================
 def loop():
     while True:
         try:
-            # Varre tanto B3 quanto Crypto (da carteira pessoal)
             lista = ler_carteira_vigilancia()
             for atv in lista:
                 try:
-                    is_crypto = "USD" in atv or "BTC" in atv
-                    df = pegar_dados_yahoo(atv, verificar_volume=not is_crypto)
+                    atv_corr = normalizar_simbolo(atv) # Normaliza antes de tudo
+                    is_crypto = "USD" in atv_corr
+                    
+                    df = pegar_dados_yahoo(atv_corr, verificar_volume=not is_crypto)
                     if df is None: continue
                     
-                    atv_corr = normalizar_simbolo(atv)
                     preco_bruto = df['Close'].iloc[-1]
                     preco = corrigida = corrigir_escala(atv_corr, preco_bruto)
                     preco_str = formatar_preco(preco)
 
-                    # --- ROTEAMENTO DE ESTRATÉGIA ---
                     if is_crypto:
                         sinal = estrategia_crypto(df)
                         tipo_ativo = "CRYPTO"
@@ -396,7 +406,7 @@ def loop():
                         tipo_ativo = "B3"
                     
                     if sinal:
-                        chave = f"{atv}_{sinal}_{datetime.now().day}_{datetime.now().hour}"
+                        chave = f"{atv_corr}_{sinal}_{datetime.now().day}_{datetime.now().hour}"
                         if chave not in ultimo_sinal_enviado:
                             aprovado, motivo = validar_sinal_com_ia(atv_corr, sinal, df, tipo_ativo)
                             if aprovado:
@@ -404,7 +414,7 @@ def loop():
                                 mk.add(InlineKeyboardButton("✅ Real", callback_data=f"REAL|{sinal}|{atv}|{preco_str}"))
                                 mk.add(InlineKeyboardButton(" App", url=gerar_link_apple(atv_corr)))
                                 emoji = "🟢" if sinal == "COMPRA" else "🔴"
-                                bot.send_message(CHAT_ID, f"{emoji} **SINAL {sinal} ({tipo_ativo})**: {atv}\nPreço: {preco_str}\n\n🧠 {motivo}", reply_markup=mk, parse_mode="Markdown")
+                                bot.send_message(CHAT_ID, f"{emoji} **SINAL {sinal}**: {atv_corr}\nPreço: {preco_str}\n\n🧠 {motivo}", reply_markup=mk, parse_mode="Markdown")
                                 ultimo_sinal_enviado[chave] = True
                             else: ultimo_sinal_enviado[chave] = True
                     time.sleep(1)
@@ -412,9 +422,6 @@ def loop():
             time.sleep(900)
         except: time.sleep(60)
 
-# ==============================================================================
-# 9. AGENDAMENTO E APP
-# ==============================================================================
 def executar_hunter_completo():
     sentimento = "Sem notícias."
     try:
@@ -438,7 +445,7 @@ def thread_agendamento():
 if TOKEN:
     app = Flask(__name__)
     @app.route('/')
-    def home(): return "QuantBot V57 (Dual Brain)"
+    def home(): return "QuantBot V58 (BDR Fix)"
     if __name__ == "__main__":
         threading.Thread(target=loop).start()
         threading.Thread(target=thread_agendamento).start()
