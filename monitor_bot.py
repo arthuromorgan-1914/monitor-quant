@@ -18,7 +18,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 NOME_PLANILHA_GOOGLE = "Trades do Robô Quant"
 
-print("--- INICIANDO QUANTBOT V62 (100% B3 + AUDITOR) ---")
+print("--- INICIANDO QUANTBOT V63 (100% B3 + ESCUDO ANTI-CRIPTO) ---")
 if not TOKEN: print("ERRO: TOKEN não encontrado.")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -59,7 +59,6 @@ def formatar_preco(valor):
     return f"{valor:.2f}"
 
 def corrigir_escala(preco):
-    # Ações B3 raramente passam de R$ 300. Se passar de 10k, é erro do Yahoo.
     if preco > 10000: return preco / 10000
     return preco
 
@@ -78,7 +77,6 @@ def pegar_dados_yahoo(symbol, verificar_volume=True):
         df = yf.Ticker(symbol_corrigido).history(period="1mo", interval="15m")
         if df is None or df.empty: return None
         
-        # Filtro de Volume Financeiro Diário
         if verificar_volume:
             vol_financeiro = df['Volume'].iloc[-1] * df['Close'].iloc[-1]
             if vol_financeiro < VOLUME_MINIMO_BRL: return None
@@ -99,7 +97,7 @@ def ler_carteira_vigilancia():
     sh = conectar_google()
     if sh:
         try: return [x.upper().strip() for x in sh.worksheet("Carteira").col_values(1) if x.strip()]
-        except: return POOL_B3 # Por padrão, vigia todos se a aba falhar
+        except: return POOL_B3 
     return POOL_B3
 
 def registrar_portfolio_real(ativo, tipo, preco):
@@ -131,7 +129,7 @@ def registrar_auditoria(ativo, sinal, preco_robo, preco_user):
     return None
 
 # ==============================================================================
-# 5. ESTRATÉGIA MATEMÁTICA B3 (O CÉREBRO)
+# 5. ESTRATÉGIA MATEMÁTICA B3
 # ==============================================================================
 def estrategia_b3(df):
     sma9 = ta.sma(df['Close'], length=9).iloc[-1]
@@ -148,13 +146,13 @@ def estrategia_b3(df):
     return None
 
 # ==============================================================================
-# 6. TELEGRAM HANDLERS E AUDITORIA
+# 6. TELEGRAM HANDLERS
 # ==============================================================================
 @bot.message_handler(commands=['start', 'menu'])
 def menu_principal(message):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📂 Portfólio", callback_data="CMD_PORTFOLIO"))
-    txt = "🤖 **QuantBot V62 - B3 Exclusive**\n\nMonitorando 75 Ativos Líquidos da Bolsa BR.\nModo: Matemática Pura (Custo Zero)."
+    txt = "🤖 **QuantBot V63 - B3 Exclusive**\n\nMonitorando 75 Ativos Líquidos da Bolsa BR.\nModo: Matemática Pura (Custo Zero)."
     bot.reply_to(message, txt, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: True)
@@ -208,6 +206,10 @@ def loop():
             lista = ler_carteira_vigilancia()
             for atv in lista:
                 try:
+                    # ESCUDO ANTI-CRIPTO: Ignora se a planilha ainda tiver moedas ou USD
+                    if "USD" in atv.upper() or "BTC" in atv.upper() or "ETH" in atv.upper():
+                        continue 
+                        
                     atv_corr = normalizar_simbolo(atv)
                     df = pegar_dados_yahoo(atv_corr, verificar_volume=True)
                     if df is None: continue
@@ -233,15 +235,15 @@ def loop():
                             bot.send_message(CHAT_ID, txt, reply_markup=mk, parse_mode="Markdown")
                             ultimo_sinal_enviado[chave] = True
                             
-                    time.sleep(1) # Pausa curta entre ativos para não sobrecarregar
+                    time.sleep(1) 
                 except: pass
-            time.sleep(900) # Pausa de 15 minutos até a próxima varredura
+            time.sleep(900) 
         except: time.sleep(60)
 
 if TOKEN:
     app = Flask(__name__)
     @app.route('/')
-    def home(): return "QuantBot V62 (B3 100% - Auditor)"
+    def home(): return "QuantBot V63 (B3 100% - Escudo Ativo)"
     if __name__ == "__main__":
         threading.Thread(target=loop).start()
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
