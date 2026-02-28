@@ -23,7 +23,7 @@ if not TOKEN: print("ERRO: TOKEN não encontrado.")
 
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
 ultimo_sinal_enviado = {} 
-VOLUME_MINIMO_BRL = 5_000_000 
+VOLUME_MINIMO_BRL = 500_000 
 
 # ==============================================================================
 # 2. POOL DE ATIVOS DA B3 (75 ATIVOS SELECIONADOS)
@@ -247,4 +247,5 @@ if TOKEN:
     if __name__ == "__main__":
         threading.Thread(target=loop).start()
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
+
         bot.infinity_polling()
